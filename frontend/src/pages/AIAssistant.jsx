@@ -13,13 +13,94 @@ const SUGGESTIONS = [
 ]
 
 export default function AIAssistant() {
-  const [messages, setMessages] = useState([])
+  // ============================================================
+  // RESTORE MESSAGES FROM CURRENT BROWSER SESSION
+  // ============================================================
+
+  const [messages, setMessages] = useState(() => {
+    try {
+      const savedMessages =
+        sessionStorage.getItem('nexa_messages')
+
+      return savedMessages
+        ? JSON.parse(savedMessages)
+        : []
+    } catch (error) {
+      console.error(
+        'Failed to restore messages:',
+        error
+      )
+
+      return []
+    }
+  })
+
   const [input, setInput] = useState('')
-  const [conversationId, setConversationId] = useState(null)
+
+  // ============================================================
+  // RESTORE CONVERSATION ID
+  // ============================================================
+
+  const [conversationId, setConversationId] =
+    useState(() => {
+      return (
+        sessionStorage.getItem(
+          'nexa_conversation_id'
+        ) || null
+      )
+    })
+
   const [loading, setLoading] = useState(false)
+
   const [error, setError] = useState(null)
 
   const bottomRef = useRef(null)
+
+  // ============================================================
+  // SAVE MESSAGES
+  // ============================================================
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        'nexa_messages',
+        JSON.stringify(messages)
+      )
+    } catch (error) {
+      console.error(
+        'Failed to save messages:',
+        error
+      )
+    }
+  }, [messages])
+
+  // ============================================================
+  // SAVE CONVERSATION ID
+  // ============================================================
+
+  useEffect(() => {
+    try {
+      if (conversationId) {
+        sessionStorage.setItem(
+          'nexa_conversation_id',
+          conversationId
+        )
+      } else {
+        sessionStorage.removeItem(
+          'nexa_conversation_id'
+        )
+      }
+    } catch (error) {
+      console.error(
+        'Failed to save conversation ID:',
+        error
+      )
+    }
+  }, [conversationId])
+
+  // ============================================================
+  // AUTO SCROLL
+  // ============================================================
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({
@@ -27,13 +108,23 @@ export default function AIAssistant() {
     })
   }, [messages, loading])
 
+  // ============================================================
+  // SEND MESSAGE
+  // ============================================================
+
   async function send(question) {
     const q = (question ?? input).trim()
 
-    if (!q || loading) return
+    if (!q || loading) {
+      return
+    }
 
     setInput('')
     setError(null)
+
+    // ----------------------------------------------------------
+    // Add user message
+    // ----------------------------------------------------------
 
     setMessages((messages) => [
       ...messages,
@@ -46,35 +137,69 @@ export default function AIAssistant() {
     setLoading(true)
 
     try {
+      // --------------------------------------------------------
+      // Call backend
+      // --------------------------------------------------------
+
       const response = await api.chat(
         q,
         conversationId,
       )
 
+      // --------------------------------------------------------
+      // Store conversation ID
+      // --------------------------------------------------------
+
+      const newConversationId =
+        response.conversation_id || null
+
       setConversationId(
-        response.conversation_id || null,
+        newConversationId
+      )
+
+      // --------------------------------------------------------
+      // Add assistant response
+      // --------------------------------------------------------
+
+      setMessages((messages) => [
+        ...messages,
+        {
+          role: 'assistant',
+
+          content:
+            response.answer,
+
+          sources:
+            response.sources || [],
+
+          grounded:
+            response.grounded,
+
+          latency:
+            response.latency_ms,
+        },
+      ])
+    } catch (error) {
+      console.error(
+        'Chat error:',
+        error
+      )
+
+      setError(
+        error.message ||
+        'Something went wrong.'
       )
 
       setMessages((messages) => [
         ...messages,
         {
           role: 'assistant',
-          content: response.answer,
-          sources: response.sources || [],
-          grounded: response.grounded,
-          latency: response.latency_ms,
-        },
-      ])
-    } catch (error) {
-      setError(error.message)
 
-      setMessages((messages) => [
-        ...messages,
-        {
-          role: 'assistant',
           content:
             'I was unable to process your question. Please try again.',
+
           sources: [],
+
           grounded: false,
         },
       ])
@@ -83,15 +208,40 @@ export default function AIAssistant() {
     }
   }
 
+  // ============================================================
+  // NEW CONVERSATION
+  // ============================================================
+
   function startNewConversation() {
     setMessages([])
+
     setConversationId(null)
+
     setInput('')
+
     setError(null)
+
+    // Clear stored session
+    sessionStorage.removeItem(
+      'nexa_messages'
+    )
+
+    sessionStorage.removeItem(
+      'nexa_conversation_id'
+    )
   }
+
+  // ============================================================
+  // UI
+  // ============================================================
 
   return (
     <div className="flex flex-col h-screen">
+
+      {/* ======================================================
+          HEADER
+          ====================================================== */}
+
       <PageHeader
         eyebrow="Ask NexaAI"
         title="AI Assistant"
@@ -99,7 +249,9 @@ export default function AIAssistant() {
         action={
           messages.length > 0 ? (
             <button
-              onClick={startNewConversation}
+              onClick={
+                startNewConversation
+              }
               className="px-4 py-2 rounded-md text-sm bg-transparent text-mist-200 border border-ink-600 hover:bg-ink-700"
             >
               New conversation
@@ -108,10 +260,21 @@ export default function AIAssistant() {
         }
       />
 
+      {/* ======================================================
+          CHAT CONTENT
+          ====================================================== */}
+
       <div className="flex-1 overflow-y-auto px-8 py-6">
+
+        {/* ====================================================
+            EMPTY STATE
+            ==================================================== */}
+
         {messages.length === 0 && (
           <div className="max-w-3xl mb-8">
+
             <div className="mb-5">
+
               <p className="text-sm text-mist-200 font-medium">
                 Ask about your knowledge base
               </p>
@@ -119,6 +282,7 @@ export default function AIAssistant() {
               <p className="text-xs text-mist-400 mt-1">
                 NexaAI retrieves relevant document chunks before generating an answer.
               </p>
+
             </div>
 
             <p className="text-xs text-mist-400 mb-3">
@@ -126,84 +290,140 @@ export default function AIAssistant() {
             </p>
 
             <div className="flex flex-wrap gap-2">
-              {SUGGESTIONS.map((suggestion) => (
-                <button
-                  key={suggestion}
-                  onClick={() => send(suggestion)}
-                  disabled={loading}
-                  className="text-xs font-mono px-3 py-2 rounded-md border border-ink-600 text-mist-300 hover:border-signal-teal/40 hover:text-signal-teal disabled:opacity-40 transition-colors"
-                >
-                  {suggestion}
-                </button>
-              ))}
+
+              {SUGGESTIONS.map(
+                (suggestion) => (
+                  <button
+                    key={suggestion}
+                    onClick={() =>
+                      send(suggestion)
+                    }
+                    disabled={loading}
+                    className="text-xs font-mono px-3 py-2 rounded-md border border-ink-600 text-mist-300 hover:border-signal-teal/40 hover:text-signal-teal disabled:opacity-40 transition-colors"
+                  >
+                    {suggestion}
+                  </button>
+                )
+              )}
+
             </div>
           </div>
         )}
 
-        <div className="space-y-5 max-w-3xl">
-          {messages.map((message, index) =>
-            message.role === 'user' ? (
-              <div
-                key={index}
-                className="flex justify-end"
-              >
-                <div className="bg-signal-indigo/15 border border-signal-indigo/30 text-mist-50 rounded-lg px-4 py-3 max-w-lg text-sm">
-                  {message.content}
-                </div>
-              </div>
-            ) : (
-              <div
-                key={index}
-                className="flex justify-start"
-              >
-                <Card className="px-4 py-4 max-w-xl w-full">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-6 h-6 rounded-md bg-signal-teal/10 border border-signal-teal/30 flex items-center justify-center text-signal-teal text-xs font-semibold">
-                      N
-                    </div>
+        {/* ====================================================
+            MESSAGES
+            ==================================================== */}
 
-                    <span className="text-xs font-mono text-mist-400">
-                      NexaAI
-                    </span>
+        <div className="space-y-5 max-w-3xl">
+
+          {messages.map(
+            (message, index) =>
+              message.role === 'user' ? (
+
+                // ------------------------------------------------
+                // USER MESSAGE
+                // ------------------------------------------------
+
+                <div
+                  key={index}
+                  className="flex justify-end"
+                >
+
+                  <div className="bg-signal-indigo/15 border border-signal-indigo/30 text-mist-50 rounded-lg px-4 py-3 max-w-lg text-sm">
+                    {message.content}
                   </div>
 
-                  <p className="text-sm text-mist-100 whitespace-pre-wrap leading-relaxed">
-                    {message.content}
-                  </p>
+                </div>
 
-                  <SourceReceipt
-                    sources={message.sources}
-                    grounded={message.grounded}
-                  />
+              ) : (
 
-                  {message.latency != null && (
-                    <div className="text-[10px] font-mono text-mist-400 mt-2">
-                      {message.latency.toFixed(0)}ms
+                // ------------------------------------------------
+                // ASSISTANT MESSAGE
+                // ------------------------------------------------
+
+                <div
+                  key={index}
+                  className="flex justify-start"
+                >
+
+                  <Card className="px-4 py-4 max-w-xl w-full">
+
+                    <div className="flex items-center gap-2 mb-2">
+
+                      <div className="w-6 h-6 rounded-md bg-signal-teal/10 border border-signal-teal/30 flex items-center justify-center text-signal-teal text-xs font-semibold">
+                        N
+                      </div>
+
+                      <span className="text-xs font-mono text-mist-400">
+                        NexaAI
+                      </span>
+
                     </div>
-                  )}
-                </Card>
-              </div>
-            ),
+
+                    <p className="text-sm text-mist-100 whitespace-pre-wrap leading-relaxed">
+                      {message.content}
+                    </p>
+
+                    <SourceReceipt
+                      sources={
+                        message.sources
+                      }
+                      grounded={
+                        message.grounded
+                      }
+                    />
+
+                    {message.latency != null && (
+                      <div className="text-[10px] font-mono text-mist-400 mt-2">
+                        {Number(
+                          message.latency
+                        ).toFixed(0)}
+                        ms
+                      </div>
+                    )}
+
+                  </Card>
+
+                </div>
+              )
           )}
+
+          {/* ==================================================
+              LOADING
+              ================================================== */}
 
           {loading && (
             <div className="flex items-center gap-2 text-mist-400 text-sm">
+
               <Spinner />
+
               retrieving context & generating...
+
             </div>
           )}
+
+          {/* ==================================================
+              ERROR
+              ================================================== */}
 
           {error && (
             <div className="text-sm text-signal-coral">
               {error}
             </div>
           )}
+
         </div>
 
         <div ref={bottomRef} />
+
       </div>
 
+      {/* ======================================================
+          INPUT
+          ====================================================== */}
+
       <div className="border-t border-ink-700 px-8 py-4">
+
         <form
           onSubmit={(event) => {
             event.preventDefault()
@@ -211,10 +431,13 @@ export default function AIAssistant() {
           }}
           className="flex gap-3 max-w-3xl"
         >
+
           <input
             value={input}
             onChange={(event) =>
-              setInput(event.target.value)
+              setInput(
+                event.target.value
+              )
             }
             placeholder="Ask a question about your documents..."
             disabled={loading}
@@ -223,13 +446,19 @@ export default function AIAssistant() {
 
           <button
             type="submit"
-            disabled={loading || !input.trim()}
+            disabled={
+              loading ||
+              !input.trim()
+            }
             className="px-5 py-2.5 rounded-md bg-signal-teal text-ink-950 text-sm font-medium hover:bg-signal-teal/90 disabled:opacity-40"
           >
             Ask
           </button>
+
         </form>
+
       </div>
+
     </div>
   )
 }
