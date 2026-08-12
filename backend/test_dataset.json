@@ -1,0 +1,36 @@
+[
+  {
+    "question": "How often are employees paid?",
+    "expected_source": "test_policy.pdf",
+    "expected_answer_keywords": ["bi-weekly"]
+  },
+  {
+    "question": "How long can the direct deposit process take?",
+    "expected_source": "test_policy.pdf",
+    "expected_answer_keywords": ["three pay periods"]
+  },
+  {
+    "question": "What is the normal workweek for employees?",
+    "expected_source": "test_policy.pdf",
+    "expected_answer_keywords": ["Monday", "Friday", "thirty-five"]
+  },
+  {
+    "question": "How long is the unpaid lunch period during a normal workday?",
+    "expected_source": "test_policy.pdf",
+    "expected_answer_keywords": ["one hour"]
+  },
+  {
+    "question": "What is the company's policy for employees working on Mars?",
+    "expected_source": null,
+    "expected_answer_keywords": [
+      "couldn't find enough information"
+    ]
+  },
+  {
+    "question": "What is the company's policy for teleporting employees to another planet?",
+    "expected_source": null,
+    "expected_answer_keywords": [
+      "couldn't find enough information"
+    ]
+  }
+]
