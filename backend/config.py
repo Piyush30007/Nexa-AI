@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     index_dir: str = "./data/index"
 
     #embediings 
-    embedding_model: str = "all-MiniLM-L6-v2"
-    embedding_dim: int = 384
+    embedding_model: str = "gemini-embedding-001"
+    embedding_dim: int = 768
 
     #chunking 
     chunk_size_tokens: int = 700

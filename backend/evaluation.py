@@ -6,7 +6,11 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from database import EvaluationRun
-from rag import answer_question, retrieve , filter_relevant_chunks
+from rag import (
+    answer_question,
+    retrieve,
+    filter_relevant_chunks,
+)
 
 
 # ============================================================
@@ -180,6 +184,7 @@ def citation_is_correct(
 # ============================================================
 # RUN EVALUATION
 # ============================================================
+
 def run_evaluation(db: Session):
 
     # --------------------------------------------------------
@@ -189,7 +194,9 @@ def run_evaluation(db: Session):
     dataset = load_dataset()
 
     if not dataset:
-        raise ValueError("test_dataset.json contains no test cases.")
+        raise ValueError(
+            "test_dataset.json contains no test cases."
+        )
 
     results = []
 
@@ -206,7 +213,10 @@ def run_evaluation(db: Session):
     # Gemini free-tier protection
     # --------------------------------------------------------
     # Only first 5 RETRIEVAL-PASS cases can call Gemini.
-    # Failed retrieval cases will NOT consume Gemini quota.
+    #
+    # Out-of-context cases do NOT need Gemini because
+    # the expected behavior is a refusal response.
+    # --------------------------------------------------------
 
     GEMINI_EVALUATION_CASES = 5
 
@@ -217,18 +227,30 @@ def run_evaluation(db: Session):
     # PROCESS EACH TEST CASE
     # ========================================================
 
-    for index, case in enumerate(dataset, start=1):
+    for index, case in enumerate(
+        dataset,
+        start=1,
+    ):
 
         question = case["question"]
 
-        print(f"\n[{index}/{len(dataset)}] Evaluating: {question}")
+        print(
+            f"\n[{index}/{len(dataset)}] "
+            f"Evaluating: {question}"
+        )
 
         # ----------------------------------------------------
         # Expected values
         # ----------------------------------------------------
 
-        expected_source = case.get("expected_source")
-        expected_keywords = case.get("expected_answer_keywords", [])
+        expected_source = case.get(
+            "expected_source"
+        )
+
+        expected_keywords = case.get(
+            "expected_answer_keywords",
+            [],
+        )
 
         # ====================================================
         # PART 1 — RETRIEVAL EVALUATION
@@ -237,25 +259,31 @@ def run_evaluation(db: Session):
         retrieval_start = time.perf_counter()
 
         try:
-            retrieved = retrieve(question, db, top_k=5)
-            usable_chunks = filter_relevant_chunks(retrieved)
+
+            retrieved = retrieve(
+                question,
+                db,
+                top_k=5,
+            )
+
+            usable_chunks = filter_relevant_chunks(
+                retrieved
+            )
+
         except Exception as e:
-            print("  Retrieval ERROR:", str(e))
+
+            print(
+                "  Retrieval ERROR:",
+                str(e),
+            )
+
             retrieved = []
-            usable_chunks =[]
+            usable_chunks = []
 
         retrieval_latency_ms = (
-            time.perf_counter() - retrieval_start
+            time.perf_counter()
+            - retrieval_start
         ) * 1000
-
-        # ====================================================
-        # ACTUAL RETRIEVED DOCUMENTS
-        # ====================================================
-
-        actual_sources = [
-            chunk["document"]
-            for chunk in usable_chunks
-        ]
 
         # ====================================================
         # RETRIEVAL ACCURACY
@@ -263,28 +291,80 @@ def run_evaluation(db: Session):
 
         if expected_source is None:
 
-    # Out-of-context question should have no relevant evidence.
-            retrieval_hit = len(usable_chunks) == 0
+            # ------------------------------------------------
+            # Out-of-context question
+            #
+            # There should be NO sufficiently relevant
+            # evidence in the knowledge base.
+            # ------------------------------------------------
+
+            retrieval_hit = (
+                len(usable_chunks) == 0
+            )
 
         else:
 
-    # Check whether expected document was retrieved.
-            document_retrieved = (
-                expected_source in actual_sources
+            # ------------------------------------------------
+            # Check whether expected document was retrieved.
+            # ------------------------------------------------
+
+            document_retrieved = any(
+                chunk.get("document")
+                == expected_source
+                for chunk in usable_chunks
+            )
+
+            # ------------------------------------------------
+            # Check whether retrieved chunks contain
+            # the expected answer evidence.
+            # ------------------------------------------------
+
+            evidence_retrieved = (
+                retrieval_evidence_is_correct(
+                    usable_chunks,
+                    expected_keywords,
                 )
+            )
 
-    # Check whether retrieved chunks contain
-    # the expected answer evidence.
-            evidence_retrieved = retrieval_evidence_is_correct(
-             usable_chunks,
-                expected_keywords,
-         )
+            # ------------------------------------------------
+            # Retrieval succeeds only when BOTH conditions pass.
+            # ------------------------------------------------
 
-    # Retrieval succeeds only when both conditions pass.
             retrieval_hit = (
-                 document_retrieved
-             and evidence_retrieved
-             )
+                document_retrieved
+                and evidence_retrieved
+            )
+
+        # ====================================================
+        # ACTUAL RETRIEVED DOCUMENTS
+        # ====================================================
+        #
+        # IMPORTANT:
+        #
+        # For an out-of-context question where retrieval_hit
+        # is false, we report NO sources.
+        #
+        # This prevents results such as:
+        #
+        # actual_sources = ["test_policy.pdf"]
+        #
+        # when the system correctly decided that the
+        # document does not contain relevant information.
+        # ====================================================
+
+        if (
+            expected_source is None
+            and not retrieval_hit
+        ):
+
+            actual_sources = []
+
+        else:
+
+            actual_sources = [
+                chunk["document"]
+                for chunk in usable_chunks
+            ]
 
         # ====================================================
         # CITATION ACCURACY
@@ -301,12 +381,16 @@ def run_evaluation(db: Session):
 
         print(
             "  Retrieval:",
-            "PASS" if retrieval_hit else "FAIL",
+            "PASS"
+            if retrieval_hit
+            else "FAIL",
         )
 
         print(
             "  Citation:",
-            "PASS" if citation_correct else "FAIL",
+            "PASS"
+            if citation_correct
+            else "FAIL",
         )
 
         print(
@@ -320,9 +404,11 @@ def run_evaluation(db: Session):
 
         if actual_sources:
 
-            print("  Retrieved documents:")
+            print(
+                "  Retrieved documents:"
+            )
 
-            for chunk in retrieved:
+            for chunk in usable_chunks:
 
                 print(
                     f"    - {chunk['document']} "
@@ -332,32 +418,87 @@ def run_evaluation(db: Session):
 
         else:
 
-            print("  Retrieved documents: NONE")
+            print(
+                "  Retrieved documents: NONE"
+            )
 
         # ====================================================
-        # PART 2 — GEMINI ANSWER EVALUATION
+        # PART 2 — ANSWER EVALUATION
         # ====================================================
 
         answer = ""
+        sources = []
+
         grounded = False
         answer_correct = False
         hallucinated = False
+
         answer_latency_ms = 0.0
 
-        # ----------------------------------------------------
-        # Gemini protection
-        #
-        # Gemini runs ONLY when:
-        #
-        # 1. We have not exceeded 5 Gemini cases
-        # 2. Retrieval passed
-        #
-        # This prevents wasting API calls on bad retrievals.
-        # ----------------------------------------------------
+        # ====================================================
+        # CASE 1 — OUT-OF-CONTEXT QUESTION
+        # ====================================================
 
-        if gemini_cases_completed < GEMINI_EVALUATION_CASES and retrieval_hit:
+        if (
+            expected_source is None
+            and not retrieval_hit
+        ):
 
-            print("  Gemini: RUNNING")
+            # ------------------------------------------------
+            # Do NOT call Gemini.
+            #
+            # This saves API quota and tests whether the
+            # RAG system correctly handles out-of-context
+            # questions.
+            # ------------------------------------------------
+
+            answer = (
+                "I couldn't find enough information "
+                "in the available knowledge base "
+                "to answer this question."
+            )
+
+            sources = []
+
+            grounded = False
+
+            answer_correct = answer_is_correct(
+                answer,
+                expected_keywords,
+            )
+
+            hallucinated = False
+
+            print(
+                "  Gemini: SKIPPED "
+                "(out-of-context)"
+            )
+
+            print(
+                "  Answer:",
+                "PASS"
+                if answer_correct
+                else "FAIL",
+            )
+
+            print(
+                "  Grounded:",
+                grounded,
+            )
+
+        # ====================================================
+        # CASE 2 — NORMAL RAG QUESTION
+        # ====================================================
+
+        elif (
+            gemini_cases_completed
+            < GEMINI_EVALUATION_CASES
+            and retrieval_hit
+        ):
+
+            print(
+                "  Gemini: RUNNING"
+            )
 
             answer_start = time.perf_counter()
 
@@ -369,7 +510,8 @@ def run_evaluation(db: Session):
                 )
 
                 answer_latency_ms = (
-                    time.perf_counter() - answer_start
+                    time.perf_counter()
+                    - answer_start
                 ) * 1000
 
                 gemini_cases_completed += 1
@@ -378,19 +520,28 @@ def run_evaluation(db: Session):
                 # Extract answer
                 # ------------------------------------------------
 
-                answer = result.get("answer", "")
+                answer = result.get(
+                    "answer",
+                    "",
+                )
 
                 # ------------------------------------------------
                 # Extract sources
                 # ------------------------------------------------
 
-                sources = result.get("sources", [])
+                sources = result.get(
+                    "sources",
+                    [],
+                )
 
                 # ------------------------------------------------
                 # Extract grounded flag
                 # ------------------------------------------------
 
-                grounded = result.get("grounded", False)
+                grounded = result.get(
+                    "grounded",
+                    False,
+                )
 
                 # ------------------------------------------------
                 # Answer correctness
@@ -406,9 +557,11 @@ def run_evaluation(db: Session):
                 # ------------------------------------------------
 
                 hallucinated = (
-                    expected_source is None and grounded
+                    expected_source is None
+                    and grounded
                 ) or (
-                    expected_source is not None and not grounded
+                    expected_source is not None
+                    and not grounded
                 )
 
                 # ------------------------------------------------
@@ -417,10 +570,15 @@ def run_evaluation(db: Session):
 
                 print(
                     "  Answer:",
-                    "PASS" if answer_correct else "FAIL",
+                    "PASS"
+                    if answer_correct
+                    else "FAIL",
                 )
 
-                print("  Grounded:", grounded)
+                print(
+                    "  Grounded:",
+                    grounded,
+                )
 
                 print(
                     "  Answer latency:",
@@ -433,7 +591,11 @@ def run_evaluation(db: Session):
 
                 if not answer_correct:
 
-                    print("  Generated answer:", answer)
+                    print(
+                        "  Generated answer:",
+                        answer,
+                    )
+
                     print(
                         "  Expected keywords:",
                         expected_keywords,
@@ -456,29 +618,63 @@ def run_evaluation(db: Session):
             except Exception as e:
 
                 answer_latency_ms = (
-                    time.perf_counter() - answer_start
+                    time.perf_counter()
+                    - answer_start
                 ) * 1000
 
                 gemini_cases_failed += 1
 
-                print("  Gemini ERROR:", str(e))
-                print("  Gemini case marked as failed.")
+                print(
+                    "  Gemini ERROR:",
+                    str(e),
+                )
+
+                print(
+                    "  Gemini case marked as failed."
+                )
+
+        # ====================================================
+        # CASE 3 — RETRIEVAL FAILED FOR AN EXPECTED
+        # IN-CONTEXT QUESTION
+        # ====================================================
+
+        elif (
+            expected_source is not None
+            and not retrieval_hit
+        ):
+
+            # ------------------------------------------------
+            # Don't call Gemini because there is no reliable
+            # context to generate an answer from.
+            # ------------------------------------------------
+
+            answer = ""
+
+            sources = []
+
+            grounded = False
+
+            answer_correct = False
+
+            hallucinated = False
+
+            answer_latency_ms = 0.0
+
+            print(
+                "  Gemini: SKIPPED "
+                "(retrieval failed)"
+            )
+
+        # ====================================================
+        # CASE 4 — GEMINI EVALUATION LIMIT REACHED
+        # ====================================================
 
         else:
 
-            if not retrieval_hit:
-
-                print(
-                    "  Gemini: SKIPPED "
-                    "(retrieval failed)"
-                )
-
-            else:
-
-                print(
-                    "  Gemini: SKIPPED "
-                    "(evaluation limit reached)"
-                )
+            print(
+                "  Gemini: SKIPPED "
+                "(evaluation limit reached)"
+            )
 
         # ====================================================
         # UPDATE COUNTERS
@@ -503,23 +699,45 @@ def run_evaluation(db: Session):
         results.append(
             {
                 "question": question,
-                "expected_source": expected_source,
-                "expected_answer_keywords": expected_keywords,
-                "actual_answer": answer,
-                "actual_sources": actual_sources,
-                "retrieval_hit": retrieval_hit,
-                "answer_correct": answer_correct,
-                "citation_correct": citation_correct,
-                "grounded": grounded,
-                "hallucinated": hallucinated,
-                "retrieval_latency_ms": round(
-                    retrieval_latency_ms,
-                    1,
-                ),
-                "answer_latency_ms": round(
-                    answer_latency_ms,
-                    1,
-                ),
+
+                "expected_source":
+                    expected_source,
+
+                "expected_answer_keywords":
+                    expected_keywords,
+
+                "actual_answer":
+                    answer,
+
+                "actual_sources":
+                    actual_sources,
+
+                "retrieval_hit":
+                    retrieval_hit,
+
+                "answer_correct":
+                    answer_correct,
+
+                "citation_correct":
+                    citation_correct,
+
+                "grounded":
+                    grounded,
+
+                "hallucinated":
+                    hallucinated,
+
+                "retrieval_latency_ms":
+                    round(
+                        retrieval_latency_ms,
+                        1,
+                    ),
+
+                "answer_latency_ms":
+                    round(
+                        answer_latency_ms,
+                        1,
+                    ),
             }
         )
 
@@ -535,6 +753,8 @@ def run_evaluation(db: Session):
 
     retrieval_accuracy = (
         retrieval_hits / total_cases
+        if total_cases
+        else 0.0
     )
 
     # --------------------------------------------------------
@@ -543,28 +763,59 @@ def run_evaluation(db: Session):
 
     citation_accuracy = (
         citation_correct_count / total_cases
+        if total_cases
+        else 0.0
     )
 
     # --------------------------------------------------------
-    # Gemini metrics
+    # Answer correctness
+    #
+    # Includes:
+    #   - Gemini-evaluated answers
+    #   - Expected out-of-context refusal answers
     # --------------------------------------------------------
 
-    if gemini_cases_completed > 0:
+    answer_correctness = (
+        answer_correct_count / total_cases
+        if total_cases
+        else 0.0
+    )
 
-        answer_correctness = (
-            answer_correct_count
-            / gemini_cases_completed
+    # --------------------------------------------------------
+    # Hallucination rate
+    #
+    # Measured across all test cases.
+    # --------------------------------------------------------
+
+    hallucination_rate = (
+        hallucinated_count / total_cases
+        if total_cases
+        else 0.0
+    )
+
+    # --------------------------------------------------------
+    # Average latency
+    #
+    # Retrieval latency + answer latency for each case.
+    #
+    # Out-of-context cases have answer latency = 0 because
+    # Gemini is intentionally skipped.
+    # --------------------------------------------------------
+
+    total_latencies = [
+        (
+            result["retrieval_latency_ms"]
+            + result["answer_latency_ms"]
         )
+        for result in results
+    ]
 
-        hallucination_rate = (
-            hallucinated_count
-            / gemini_cases_completed
-        )
-
-    else:
-
-        answer_correctness = 0.0
-        hallucination_rate = 0.0
+    avg_latency_ms = (
+        sum(total_latencies)
+        / len(total_latencies)
+        if total_latencies
+        else 0.0
+    )
 
     # ========================================================
     # SAVE EVALUATION RUN TO SQLITE
@@ -572,48 +823,74 @@ def run_evaluation(db: Session):
 
     evaluation_run = EvaluationRun(
         num_cases=total_cases,
+
         retrieval_accuracy=round(
             retrieval_accuracy,
             4,
         ),
+
         answer_correctness=round(
             answer_correctness,
             4,
         ),
+
         citation_accuracy=round(
             citation_accuracy,
             4,
         ),
+
         hallucination_rate=round(
             hallucination_rate,
             4,
         ),
-        avg_latency_ms=0.0,
+
+        avg_latency_ms=round(
+            avg_latency_ms,
+            2,
+        ),
+
         results=results,
     )
 
-    db.add(evaluation_run)
+    db.add(
+        evaluation_run
+    )
+
     db.commit()
-    db.refresh(evaluation_run)
+
+    db.refresh(
+        evaluation_run
+    )
 
     # ========================================================
     # FINAL OUTPUT
     # ========================================================
 
-    print("\n" + "=" * 60)
-    print("EVALUATION COMPLETE")
-    print("=" * 60)
-
     print(
-        f"Total test cases       : {total_cases}"
+        "\n" + "=" * 60
     )
 
     print(
-        f"Gemini cases completed : {gemini_cases_completed}"
+        "EVALUATION COMPLETE"
     )
 
     print(
-        f"Gemini cases failed    : {gemini_cases_failed}"
+        "=" * 60
+    )
+
+    print(
+        f"Total test cases       : "
+        f"{total_cases}"
+    )
+
+    print(
+        f"Gemini cases completed : "
+        f"{gemini_cases_completed}"
+    )
+
+    print(
+        f"Gemini cases failed    : "
+        f"{gemini_cases_failed}"
     )
 
     print(
@@ -636,6 +913,13 @@ def run_evaluation(db: Session):
         f"{hallucination_rate * 100:.2f}%"
     )
 
-    print("=" * 60)
+    print(
+        f"Average Latency        : "
+        f"{avg_latency_ms:.2f} ms"
+    )
+
+    print(
+        "=" * 60
+    )
 
     return evaluation_run

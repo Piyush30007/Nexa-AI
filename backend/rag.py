@@ -38,28 +38,148 @@ import uuid
 import faiss
 import numpy as np
 import fitz  # PyMuPDF
-from sentence_transformers import SentenceTransformer
+# from sentence_transformers import SentenceTransformer
 from sqlalchemy.orm import Session
 
 from config import settings
 from database import Document, Chunk
 from google import genai
-
+from google.genai import types 
 #embedding model
 
-_embedding_model = None #initially we doesnt have any emebedding model it is empty
+# ============================================================
+# GEMINI CLIENT
+# ============================================================
+
+_gemini_client = None
 
 
-def get_embedding_model():
-    global _embedding_model
+def get_gemini_client():
+    """
+    Create and cache the Gemini client.
+    """
 
-    if _embedding_model is None:
-        _embedding_model = SentenceTransformer(
-            settings.embedding_model #here we loaded the embedding model that has been we put in system file 
-            
+    global _gemini_client
+
+    if _gemini_client is None:
+
+        if not settings.gemini_api_key:
+            raise ValueError(
+                "GEMINI_API_KEY is missing."
+            )
+
+        _gemini_client = genai.Client(
+            api_key=settings.gemini_api_key
         )
 
-    return _embedding_model
+    return _gemini_client
+
+
+# ============================================================
+# GEMINI EMBEDDINGS
+# ============================================================
+
+def create_embeddings(
+    texts: list[str],
+    task_type: str = "RETRIEVAL_DOCUMENT",
+) -> np.ndarray:
+    """
+    Convert text into normalized Gemini embedding vectors.
+
+    Gemini embedding model:
+        gemini-embedding-001
+
+    Output dimension:
+        settings.embedding_dim
+
+    Task types:
+        RETRIEVAL_DOCUMENT
+        RETRIEVAL_QUERY
+    """
+
+    if not texts:
+        return np.zeros(
+            (0, settings.embedding_dim),
+            dtype="float32",
+        )
+
+    client = get_gemini_client()
+
+    all_vectors = []
+
+    # Keep batches reasonably small.
+    # This avoids sending a huge request for large PDFs.
+    batch_size = 50
+
+    for start in range(0, len(texts), batch_size):
+
+        batch = texts[
+            start:start + batch_size
+        ]
+
+        response = client.models.embed_content(
+            model=settings.embedding_model,
+            contents=batch,
+            config=types.EmbedContentConfig(
+                task_type=task_type,
+                output_dimensionality=settings.embedding_dim,
+            ),
+        )
+
+        if not response.embeddings:
+            raise ValueError(
+                "Gemini returned no embeddings."
+            )
+
+        for embedding in response.embeddings:
+
+            if not embedding.values:
+                raise ValueError(
+                    "Gemini returned an empty embedding."
+                )
+
+            all_vectors.append(
+                embedding.values
+            )
+
+    vectors = np.asarray(
+        all_vectors,
+        dtype="float32",
+    )
+
+    # Make sure the dimension is exactly what FAISS expects.
+    if vectors.shape[1] != settings.embedding_dim:
+
+        raise ValueError(
+            f"Embedding dimension mismatch. "
+            f"Expected {settings.embedding_dim}, "
+            f"got {vectors.shape[1]}."
+        )
+
+    # Normalize vectors.
+    #
+    # After normalization:
+    # inner product ≈ cosine similarity
+    #
+    # This matches FAISS IndexFlatIP.
+    faiss.normalize_L2(vectors)
+
+    return vectors
+
+
+def create_query_embedding(
+    question: str,
+) -> np.ndarray:
+    """
+    Create an embedding specifically for a retrieval query.
+    """
+
+    vectors = create_embeddings(
+        [question],
+        task_type="RETRIEVAL_QUERY",
+    )
+
+    return vectors[0]
 
 
 #will extract text from the pdf 
@@ -175,43 +295,43 @@ def chunk_pages(
     return chunks
 
 #embeddings  create converts text->vectors 
-def create_embeddings(chunks: list[dict]) -> np.ndarray:
-    """
-    Convert chunk text into normalized embedding vectors.
+# def create_embeddings(chunks: list[dict]) -> np.ndarray:
+#     """
+#     Convert chunk text into normalized embedding vectors.
 
-    Input:
-        [
-            {"text": "...", "page": 1, "chunk_index": 0},
-            {"text": "...", "page": 1, "chunk_index": 1},
-        ]
+#     Input:
+#         [
+#             {"text": "...", "page": 1, "chunk_index": 0},
+#             {"text": "...", "page": 1, "chunk_index": 1},
+#         ]
 
-    Output:
-        NumPy array of shape:
-        (number_of_chunks, embedding_dimension)
-    """
+#     Output:
+#         NumPy array of shape:
+#         (number_of_chunks, embedding_dimension)
+#     """
 
-    if not chunks:
-        return np.zeros(
-            (0, settings.embedding_dim),
-            dtype="float32",
-        )
+#     if not chunks:
+#         return np.zeros(
+#             (0, settings.embedding_dim),
+#             dtype="float32",
+#         )
 
-    model = get_embedding_model()
+#     model = get_embedding_model()
 
-    texts = [
-        chunk["text"]
-        for chunk in chunks
-    ]
+#     texts = [
+#         chunk["text"]
+#         for chunk in chunks
+#     ]
 
-    vectors = model.encode(
-        texts,
-        convert_to_numpy=True,
-        normalize_embeddings=True, #normalize each vector to have approximately unit length because later we are  going to use faiss.indexflatip which performs inner product search 
-        #when vectors are normalized inner product == cosine similarity 
-        show_progress_bar=True, #it  display progress while embedding are beign generated 
-    )
+#     vectors = model.encode(
+#         texts,
+#         convert_to_numpy=True,
+#         normalize_embeddings=True, #normalize each vector to have approximately unit length because later we are  going to use faiss.indexflatip which performs inner product search 
+#         #when vectors are normalized inner product == cosine similarity 
+#         show_progress_bar=True, #it  display progress while embedding are beign generated 
+#     )
 
-    return vectors.astype("float32") #connverts vectors to 32 bit floating point numbers because faiss excepts /works efficiently with float 32 vectors  
+#     return vectors.astype("float32") #connverts vectors to 32 bit floating point numbers because faiss excepts /works efficiently with float 32 vectors  
 
 #faiss vector store 
 #faiss is so fast becausee it uses the k means clustering , product quantization and optimized bruteforce search
@@ -300,8 +420,10 @@ def search_faiss(
         return []
 
     query = query_vector.reshape(
-        1, -1
-    ).astype("float32")
+    1, -1
+).astype("float32")
+
+    faiss.normalize_L2(query)
 
     scores, ids = index.search(
         query,
@@ -378,7 +500,15 @@ def ingest_document(
     # 3. Create embeddings
     # --------------------------------------------------------
 
-    vectors = create_embeddings(chunks)
+    texts = [
+    chunk["text"]
+    for chunk in chunks
+        ]
+
+    vectors = create_embeddings(
+        texts,
+    task_type="RETRIEVAL_DOCUMENT",
+        )
 
     # --------------------------------------------------------
     # 4. Create document record in SQLite
@@ -464,15 +594,7 @@ def retrieve(
     # 1. Convert question into embedding
     # --------------------------------------------------------
 
-    query_vector = create_embeddings(
-        [
-            {
-                "text": question,
-                "page": None,
-                "chunk_index": 0,
-            }
-        ]
-    )[0]
+    query_vector = create_query_embedding(question)
 
     # --------------------------------------------------------
     # 2. Search FAISS
@@ -722,12 +844,10 @@ def filter_relevant_chunks(
     the ranking returned by FAISS.
     """
 
-    MIN_SCORE = 0.30
-
     return [
         chunk
         for chunk in chunks
-        if chunk["score"] >= MIN_SCORE
+        if chunk["score"] >= settings.min_relevance_score
     ]
 # ============================================================
 # COMPLETE RAG PIPELINE
@@ -839,29 +959,41 @@ def answer_question(
     # 5. Ask Gemini
     # ========================================================
 
-    answer = generate_answer(
-        prompt
-    )
+    answer = generate_answer(prompt)
 
-    # ========================================================
-    # 6. Build sources
-    # ========================================================
+    clean_answer = answer.strip()
+
+# Gemini determined that the retrieved context
+# does not contain enough information.
+    if clean_answer.lower() == no_answer.lower():
+         return {
+        "answer": no_answer,
+        "sources": [],
+        "grounded": False,
+    }
 
     sources = []
 
     for chunk in usable_chunks:
-
         sources.append(
-            {
-                "document": chunk["document"],
-                "page": chunk["page"],
-                "chunk_id": chunk["chunk_id"],
-                "score": round(
-                    chunk["score"],
-                    4,
-                ),
-            }
-        )
+        {
+            "document": chunk["document"],
+            "page": chunk["page"],
+            "chunk_id": chunk["chunk_id"],
+            "score": round(
+                chunk["score"],
+                4,
+            ),
+        }
+    )
+
+    grounded = True
+
+    return {
+    "answer": clean_answer,
+    "sources": sources,
+    "grounded": grounded,
+}
 
     # ========================================================
     # 7. Determine whether answer is grounded
