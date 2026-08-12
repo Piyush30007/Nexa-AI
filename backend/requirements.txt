@@ -5,12 +5,17 @@ SQLAlchemy==2.0.35
 pydantic==2.9.2
 pydantic-settings==2.5.2
 python-dotenv==1.0.1
+
 sentence-transformers==3.1.1
-torch
-langchain-text-splitters
+torch==2.5.1+cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 faiss-cpu==1.8.0.post1
+langchain-text-splitters
 PyMuPDF==1.24.10
 python-docx==1.1.2
+
 google-genai
+
 numpy==1.26.4
 pandas==2.2.2
