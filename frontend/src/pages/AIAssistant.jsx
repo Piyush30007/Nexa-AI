@@ -1,3 +1,4 @@
+```jsx
 import React from 'react'
 import { useRef, useState, useEffect } from 'react'
 import PageHeader from '../components/PageHeader.jsx'
@@ -51,6 +52,15 @@ export default function AIAssistant() {
     })
 
   const [loading, setLoading] = useState(false)
+
+  // Backend connection status:
+  // idle       -> no request
+  // connecting -> request started
+  // waking     -> request taking longer than 5 seconds
+  // ready      -> backend responded successfully
+  // error      -> request failed
+  const [backendStatus, setBackendStatus] =
+    useState("idle")
 
   const [error, setError] = useState(null)
 
@@ -136,7 +146,22 @@ export default function AIAssistant() {
 
     setLoading(true)
 
+    // Start with normal connection state
+    setBackendStatus("connecting")
+
+    // Timer used to detect a possible Render cold start
+    let wakeupTimer
+
     try {
+      // --------------------------------------------------------
+      // If backend takes more than 5 seconds,
+      // show the user that it may be waking up.
+      // --------------------------------------------------------
+
+      wakeupTimer = setTimeout(() => {
+        setBackendStatus("waking")
+      }, 5000)
+
       // --------------------------------------------------------
       // Call backend
       // --------------------------------------------------------
@@ -145,6 +170,11 @@ export default function AIAssistant() {
         q,
         conversationId,
       )
+
+      // Backend responded successfully
+      clearTimeout(wakeupTimer)
+
+      setBackendStatus("ready")
 
       // --------------------------------------------------------
       // Store conversation ID
@@ -179,11 +209,18 @@ export default function AIAssistant() {
             response.latency_ms,
         },
       ])
+
     } catch (error) {
+      // Make sure the cold-start timer doesn't
+      // continue after the request has failed.
+      clearTimeout(wakeupTimer)
+
       console.error(
         'Chat error:',
         error
       )
+
+      setBackendStatus("error")
 
       setError(
         error.message ||
@@ -203,6 +240,7 @@ export default function AIAssistant() {
           grounded: false,
         },
       ])
+
     } finally {
       setLoading(false)
     }
@@ -220,6 +258,9 @@ export default function AIAssistant() {
     setInput('')
 
     setError(null)
+
+    // Reset backend status
+    setBackendStatus("idle")
 
     // Clear stored session
     sessionStorage.removeItem(
@@ -397,7 +438,22 @@ export default function AIAssistant() {
 
               <Spinner />
 
-              retrieving context & generating...
+              {backendStatus === "waking" ? (
+                <div>
+                  <div>
+                    Starting AI server...
+                  </div>
+
+                  <div className="text-xs text-mist-400 mt-1">
+                    The backend may be waking up.
+                    This can take up to a minute.
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  Connecting to AI server...
+                </div>
+              )}
 
             </div>
           )}
@@ -462,3 +518,4 @@ export default function AIAssistant() {
     </div>
   )
 }
+```
