@@ -1,4 +1,3 @@
-```jsx
 import React from 'react'
 import { useRef, useState, useEffect } from 'react'
 import PageHeader from '../components/PageHeader.jsx'
@@ -518,4 +517,3 @@ export default function AIAssistant() {
     </div>
   )
 }
-```
