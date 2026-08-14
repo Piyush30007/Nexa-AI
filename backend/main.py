@@ -1,5 +1,6 @@
 from pathlib import Path
 import shutil
+import time
 
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +11,7 @@ from config import settings
 from database import (
     get_db,
     init_db,
+    SessionLocal,
     Document,
     EvaluationRun,
     UsageLog,
@@ -32,12 +34,31 @@ app = FastAPI(
 
 
 # ============================================================
-# DATABASE STARTUP
+# DATABASE STARTUP & BASELINE SEEDING
 # ============================================================
 
 @app.on_event("startup")
 def startup():
     init_db()
+
+    # Check whether the database already contains documents
+    db = SessionLocal()
+    try:
+        doc_count = db.query(Document).count()
+        if doc_count == 0:
+            sample_pdf = Path(settings.sample_docs_dir) / "test_policy.pdf"
+            if sample_pdf.exists():
+                print(f"[Startup] Database is empty. Seeding baseline document: {sample_pdf.name}")
+                ingest_document(str(sample_pdf), db)
+                print("[Startup] Baseline document successfully ingested.")
+            else:
+                print(f"[Startup] Sample document not found at {sample_pdf}")
+        else:
+            print(f"[Startup] Database already contains {doc_count} document(s). Skipping seeding.")
+    except Exception as e:
+        print(f"[Startup] Seeding check encountered an issue: {e}")
+    finally:
+        db.close()
 
 
 # ============================================================
@@ -213,15 +234,107 @@ def chat(
 
     try:
 
+        # 1. Retrieve or create Conversation
+        conversation_id = request.conversation_id
+        conversation = None
+
+        if conversation_id:
+            conversation = (
+                db.query(Conversation)
+                .filter(
+                    Conversation.id == conversation_id
+                )
+                .first()
+            )
+
+        if conversation is None:
+            conversation_title = request.question.strip()[:60] or "New conversation"
+            conversation = Conversation(
+                id=conversation_id if conversation_id else None,
+                title=conversation_title,
+            )
+            db.add(conversation)
+            db.commit()
+            db.refresh(conversation)
+
+        conversation_id = conversation.id
+
+        # 2. Save user message
+        user_message = Message(
+            conversation_id=conversation_id,
+            role="user",
+            content=request.question,
+            sources=[],
+        )
+        db.add(user_message)
+        db.commit()
+
+        # 3. Run RAG pipeline with timing
+        start_time = time.perf_counter()
         result = answer_question(
             request.question,
             db,
         )
+        latency_ms = round(
+            (time.perf_counter() - start_time) * 1000,
+            2,
+        )
 
-        return result
+        answer_text = result.get("answer", "")
+        sources = result.get("sources", [])
+        grounded = result.get("grounded", False)
+
+        # 4. Save assistant response message with sources
+        assistant_message = Message(
+            conversation_id=conversation_id,
+            role="assistant",
+            content=answer_text,
+            sources=sources,
+        )
+        db.add(assistant_message)
+
+        # 5. Record usage information
+        context_chars = sum(
+            len(str(s.get("text", "")))
+            for s in sources
+        )
+        input_tokens = max(
+            1,
+            (len(request.question) + context_chars) // 4,
+        )
+        output_tokens = max(
+            1,
+            len(answer_text) // 4,
+        )
+        estimated_cost = round(
+            (input_tokens / 1000.0 * settings.cost_per_1k_input_tokens)
+            + (output_tokens / 1000.0 * settings.cost_per_1k_output_tokens),
+            6,
+        )
+
+        usage_log = UsageLog(
+            endpoint="/api/chat",
+            model=settings.gemini_model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_ms=latency_ms,
+            estimated_cost=estimated_cost,
+            was_grounded=1 if grounded else 0,
+        )
+        db.add(usage_log)
+        db.commit()
+
+        # 6. Return response contract
+        return {
+            "conversation_id": conversation_id,
+            "answer": answer_text,
+            "sources": sources,
+            "grounded": grounded,
+            "latency_ms": latency_ms,
+        }
 
     except Exception as e:
-
+        db.rollback()
         raise HTTPException(
             status_code=500,
             detail=str(e),

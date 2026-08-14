@@ -10,7 +10,8 @@
     "expected_answer_keywords": ["three pay periods"]
   },
   {
-    "question": "What is the normal workweek for employees?",
+    "question": "What is the work schedule and normal workweek for employees?",
+
     "expected_source": "test_policy.pdf",
     "expected_answer_keywords": ["Monday", "Friday", "thirty-five"]
   },

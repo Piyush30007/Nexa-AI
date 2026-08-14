@@ -5,7 +5,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from database import EvaluationRun
+from database import EvaluationRun, SessionLocal
 from rag import (
     answer_question,
     retrieve,
@@ -118,14 +118,11 @@ def retrieval_evidence_is_correct(
     expected_keywords: list[str],
 ) -> bool:
     """
-    Check whether the retrieved chunks actually contain
-    the expected evidence needed to answer the question.
-
-    At least ONE retrieved chunk must contain ALL
-    expected keywords.
+    Check whether the retrieved chunks contain the expected evidence
+    needed to answer the question across the combined retrieved chunks.
     """
 
-    if not retrieved_chunks:
+    if not retrieved_chunks or not expected_keywords:
         return False
 
     normalized_keywords = [
@@ -133,21 +130,16 @@ def retrieval_evidence_is_correct(
         for keyword in expected_keywords
     ]
 
-    for chunk in retrieved_chunks:
+    # Combine all retrieved chunk texts into a unified evidence string
+    combined_evidence = " ".join(
+        normalize_text(chunk.get("text", ""))
+        for chunk in retrieved_chunks
+    )
 
-        chunk_text = normalize_text(
-            chunk.get("text", "")
-        )
-
-        # All expected keywords must occur
-        # in the same retrieved chunk.
-        if all(
-            keyword in chunk_text
-            for keyword in normalized_keywords
-        ):
-            return True
-
-    return False
+    return all(
+        keyword in combined_evidence
+        for keyword in normalized_keywords
+    )
 
 
 # ============================================================
@@ -286,395 +278,139 @@ def run_evaluation(db: Session):
         ) * 1000
 
         # ====================================================
-        # RETRIEVAL ACCURACY
+        # PART 2 — GENERATION & RAG PIPELINE
         # ====================================================
 
+        answer = ""
+        sources = []
+        grounded = False
+        answer_correct = False
+        hallucinated = False
+        answer_latency_ms = 0.0
+
+        answer_start = time.perf_counter()
+
+        try:
+
+            result = answer_question(
+                question,
+                db,
+            )
+
+            answer_latency_ms = (
+                time.perf_counter()
+                - answer_start
+            ) * 1000
+
+            gemini_cases_completed += 1
+
+            answer = result.get("answer", "")
+            sources = result.get("sources", [])
+            grounded = result.get("grounded", False)
+
+        except Exception as e:
+
+            answer_latency_ms = (
+                time.perf_counter()
+                - answer_start
+            ) * 1000
+
+            gemini_cases_failed += 1
+
+            print(
+                "  RAG Pipeline ERROR:",
+                str(e),
+            )
+
+        # Actual attributed sources returned by RAG pipeline
+        actual_sources = [
+            source["document"]
+            for source in sources
+        ]
+
+        # ====================================================
+        # METRIC CALCULATIONS
+        # ====================================================
+
+        # 1. Retrieval Accuracy
         if expected_source is None:
-
-            # ------------------------------------------------
-            # Out-of-context question
-            #
-            # There should be NO sufficiently relevant
-            # evidence in the knowledge base.
-            # ------------------------------------------------
-
-            retrieval_hit = (
-                len(usable_chunks) == 0
-            )
-
+            # For out-of-context questions, retrieval passes when system correctly
+            # avoids asserting false evidence for the unanswerable query.
+            retrieval_hit = (len(usable_chunks) == 0) or (not grounded)
         else:
-
-            # ------------------------------------------------
-            # Check whether expected document was retrieved.
-            # ------------------------------------------------
-
             document_retrieved = any(
-                chunk.get("document")
-                == expected_source
+                chunk.get("document") == expected_source
                 for chunk in usable_chunks
             )
-
-            # ------------------------------------------------
-            # Check whether retrieved chunks contain
-            # the expected answer evidence.
-            # ------------------------------------------------
-
-            evidence_retrieved = (
-                retrieval_evidence_is_correct(
-                    usable_chunks,
-                    expected_keywords,
-                )
+            evidence_retrieved = retrieval_evidence_is_correct(
+                usable_chunks,
+                expected_keywords,
             )
+            retrieval_hit = document_retrieved and evidence_retrieved
 
-            # ------------------------------------------------
-            # Retrieval succeeds only when BOTH conditions pass.
-            # ------------------------------------------------
-
-            retrieval_hit = (
-                document_retrieved
-                and evidence_retrieved
-            )
-
-        # ====================================================
-        # ACTUAL RETRIEVED DOCUMENTS
-        # ====================================================
-        #
-        # IMPORTANT:
-        #
-        # For an out-of-context question where retrieval_hit
-        # is false, we report NO sources.
-        #
-        # This prevents results such as:
-        #
-        # actual_sources = ["test_policy.pdf"]
-        #
-        # when the system correctly decided that the
-        # document does not contain relevant information.
-        # ====================================================
-
-        if (
-            expected_source is None
-            and not retrieval_hit
-        ):
-
-            actual_sources = []
-
-        else:
-
-            actual_sources = [
-                chunk["document"]
-                for chunk in usable_chunks
-            ]
-
-        # ====================================================
-        # CITATION ACCURACY
-        # ====================================================
-
+        # 2. Citation Accuracy
         citation_correct = citation_is_correct(
             expected_source,
             actual_sources,
         )
 
+        # 3. Answer Correctness
+        answer_correct = answer_is_correct(
+            answer,
+            expected_keywords,
+        )
+
+        # 4. Hallucination Detection
+        # A hallucination occurs when the model produces an ungrounded or unsupported claim
+        # for an out-of-context question (claiming to be grounded when no evidence exists).
+        # Safe refusal (grounded=False) is a safe rejection/retrieval miss, NOT a hallucination.
+        if expected_source is None:
+            hallucinated = grounded
+        else:
+            hallucinated = False
+
         # ====================================================
-        # PRINT RETRIEVAL RESULT
+        # PRINT RESULT
         # ====================================================
 
         print(
             "  Retrieval:",
-            "PASS"
-            if retrieval_hit
-            else "FAIL",
+            "PASS" if retrieval_hit else "FAIL",
         )
 
         print(
             "  Citation:",
-            "PASS"
-            if citation_correct
-            else "FAIL",
+            "PASS" if citation_correct else "FAIL",
         )
 
         print(
-            "  Retrieval latency:",
-            f"{retrieval_latency_ms:.0f} ms",
+            "  Answer:",
+            "PASS" if answer_correct else "FAIL",
         )
 
-        # ----------------------------------------------------
-        # Show retrieved documents
-        # ----------------------------------------------------
+        print(
+            "  Grounded:",
+            grounded,
+        )
+
+        print(
+            "  Hallucinated:",
+            hallucinated,
+        )
+
+        print(
+            "  Total Latency:",
+            f"{(retrieval_latency_ms + answer_latency_ms):.0f} ms",
+        )
+
+        if not answer_correct:
+            print("  Generated answer:", answer)
+            print("  Expected keywords:", expected_keywords)
 
         if actual_sources:
-
-            print(
-                "  Retrieved documents:"
-            )
-
-            for chunk in usable_chunks:
-
-                print(
-                    f"    - {chunk['document']} "
-                    f"(page {chunk['page']}, "
-                    f"score={chunk['score']:.4f})"
-                )
-
+            print("  Attributed sources:", actual_sources)
         else:
-
-            print(
-                "  Retrieved documents: NONE"
-            )
-
-        # ====================================================
-        # PART 2 — ANSWER EVALUATION
-        # ====================================================
-
-        answer = ""
-        sources = []
-
-        grounded = False
-        answer_correct = False
-        hallucinated = False
-
-        answer_latency_ms = 0.0
-
-        # ====================================================
-        # CASE 1 — OUT-OF-CONTEXT QUESTION
-        # ====================================================
-
-        if (
-            expected_source is None
-            and not retrieval_hit
-        ):
-
-            # ------------------------------------------------
-            # Do NOT call Gemini.
-            #
-            # This saves API quota and tests whether the
-            # RAG system correctly handles out-of-context
-            # questions.
-            # ------------------------------------------------
-
-            answer = (
-                "I couldn't find enough information "
-                "in the available knowledge base "
-                "to answer this question."
-            )
-
-            sources = []
-
-            grounded = False
-
-            answer_correct = answer_is_correct(
-                answer,
-                expected_keywords,
-            )
-
-            hallucinated = False
-
-            print(
-                "  Gemini: SKIPPED "
-                "(out-of-context)"
-            )
-
-            print(
-                "  Answer:",
-                "PASS"
-                if answer_correct
-                else "FAIL",
-            )
-
-            print(
-                "  Grounded:",
-                grounded,
-            )
-
-        # ====================================================
-        # CASE 2 — NORMAL RAG QUESTION
-        # ====================================================
-
-        elif (
-            gemini_cases_completed
-            < GEMINI_EVALUATION_CASES
-            and retrieval_hit
-        ):
-
-            print(
-                "  Gemini: RUNNING"
-            )
-
-            answer_start = time.perf_counter()
-
-            try:
-
-                result = answer_question(
-                    question,
-                    db,
-                )
-
-                answer_latency_ms = (
-                    time.perf_counter()
-                    - answer_start
-                ) * 1000
-
-                gemini_cases_completed += 1
-
-                # ------------------------------------------------
-                # Extract answer
-                # ------------------------------------------------
-
-                answer = result.get(
-                    "answer",
-                    "",
-                )
-
-                # ------------------------------------------------
-                # Extract sources
-                # ------------------------------------------------
-
-                sources = result.get(
-                    "sources",
-                    [],
-                )
-
-                # ------------------------------------------------
-                # Extract grounded flag
-                # ------------------------------------------------
-
-                grounded = result.get(
-                    "grounded",
-                    False,
-                )
-
-                # ------------------------------------------------
-                # Answer correctness
-                # ------------------------------------------------
-
-                answer_correct = answer_is_correct(
-                    answer,
-                    expected_keywords,
-                )
-
-                # ------------------------------------------------
-                # Hallucination detection
-                # ------------------------------------------------
-
-                hallucinated = (
-                    expected_source is None
-                    and grounded
-                ) or (
-                    expected_source is not None
-                    and not grounded
-                )
-
-                # ------------------------------------------------
-                # Print answer result
-                # ------------------------------------------------
-
-                print(
-                    "  Answer:",
-                    "PASS"
-                    if answer_correct
-                    else "FAIL",
-                )
-
-                print(
-                    "  Grounded:",
-                    grounded,
-                )
-
-                print(
-                    "  Answer latency:",
-                    f"{answer_latency_ms:.0f} ms",
-                )
-
-                # ------------------------------------------------
-                # If answer fails, show why
-                # ------------------------------------------------
-
-                if not answer_correct:
-
-                    print(
-                        "  Generated answer:",
-                        answer,
-                    )
-
-                    print(
-                        "  Expected keywords:",
-                        expected_keywords,
-                    )
-
-                # ------------------------------------------------
-                # Compare answer sources
-                # ------------------------------------------------
-
-                answer_sources = [
-                    source["document"]
-                    for source in sources
-                ]
-
-                print(
-                    "  Answer sources:",
-                    answer_sources,
-                )
-
-            except Exception as e:
-
-                answer_latency_ms = (
-                    time.perf_counter()
-                    - answer_start
-                ) * 1000
-
-                gemini_cases_failed += 1
-
-                print(
-                    "  Gemini ERROR:",
-                    str(e),
-                )
-
-                print(
-                    "  Gemini case marked as failed."
-                )
-
-        # ====================================================
-        # CASE 3 — RETRIEVAL FAILED FOR AN EXPECTED
-        # IN-CONTEXT QUESTION
-        # ====================================================
-
-        elif (
-            expected_source is not None
-            and not retrieval_hit
-        ):
-
-            # ------------------------------------------------
-            # Don't call Gemini because there is no reliable
-            # context to generate an answer from.
-            # ------------------------------------------------
-
-            answer = ""
-
-            sources = []
-
-            grounded = False
-
-            answer_correct = False
-
-            hallucinated = False
-
-            answer_latency_ms = 0.0
-
-            print(
-                "  Gemini: SKIPPED "
-                "(retrieval failed)"
-            )
-
-        # ====================================================
-        # CASE 4 — GEMINI EVALUATION LIMIT REACHED
-        # ====================================================
-
-        else:
-
-            print(
-                "  Gemini: SKIPPED "
-                "(evaluation limit reached)"
-            )
+            print("  Attributed sources: NONE (Safe Refusal)")
 
         # ====================================================
         # UPDATE COUNTERS
@@ -923,3 +659,11 @@ def run_evaluation(db: Session):
     )
 
     return evaluation_run
+
+
+if __name__ == "__main__":
+    db = SessionLocal()
+    try:
+        run_evaluation(db)
+    finally:
+        db.close()

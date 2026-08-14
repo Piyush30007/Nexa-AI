@@ -13,32 +13,32 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash-lite"
 
-    #database link stuff 
-    database_url: str = "sqlite:///./data/nexaai.db"
+    # database link stuff (resolved relative to BASE_DIR)
+    database_url: str = f"sqlite:///{Path(BASE_DIR / 'data' / 'nexaai.db').resolve().as_posix()}"
 
-    #faiss storage 
-    upload_dir: str = "./data/uploads"
-    index_dir: str = "./data/index"
+    # faiss storage & uploads (resolved relative to BASE_DIR)
+    upload_dir: str = str(BASE_DIR / "data" / "uploads")
+    index_dir: str = str(BASE_DIR / "data" / "index")
+    sample_docs_dir: str = str(BASE_DIR / "sample_docs")
 
-    #embediings 
+    # embeddings 
     embedding_model: str = "gemini-embedding-001"
     embedding_dim: int = 768
 
-    #chunking 
+    # chunking 
     chunk_size_tokens: int = 700
     chunk_overlap_tokens: int = 100
 
-    #reterival what we need 
+    # retrieval parameters
     top_k: int = 5
 
-    #if the retrerival score is lees than this model will say i doesnt know means it is out context 
+    # if retrieval score is less than this, query is considered out of context
     min_relevance_score: float = 0.40
 
-    #react frontend 
-    
+    # react frontend 
     frontend_origin: str = "http://localhost:5173"
 
-    #cost_estination for paid pricing for 2.5 flash model gemini for 1k input token 
+    # cost estimation for 1k tokens
     cost_per_1k_input_tokens: float = 0.0003
     cost_per_1k_output_tokens: float = 0.0025
 
@@ -53,12 +53,18 @@ class Settings(BaseSettings):
             exist_ok=True,
         )
 
-        Path(
-            self.database_url.replace("sqlite:///", "")
-        ).parent.mkdir(
+        Path(self.sample_docs_dir).mkdir(
             parents=True,
             exist_ok=True,
         )
+
+        if self.database_url.startswith("sqlite:///"):
+            Path(
+                self.database_url.replace("sqlite:///", "")
+            ).parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
 
 
 settings = Settings()
