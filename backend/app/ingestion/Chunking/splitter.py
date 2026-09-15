@@ -1,5 +1,5 @@
 from typing import List
-import logfire
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> List[str]:
@@ -18,17 +18,26 @@ def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> List[st
         raise ValueError("chunk_size must be a positive integer.")
     if overlap < 0:
         raise ValueError("overlap must be a non-negative integer.")
+    if overlap>=chunk_size:
+        raise ValueError("overlap must be less than chunk_size.")
+    # chunks = []
+    # start = 0
+    # text_length = len(text)
     
-    chunks = []
-    start = 0
-    text_length = len(text)
-    
-    while start < text_length:
-        end = min(start + chunk_size, text_length)
-        chunk = text[start:end]
-        chunks.append(chunk)
+    # while start < text_length:
+    #     end = min(start + chunk_size, text_length)
+    #     chunk = text[start:end]
+    #     chunks.append(chunk)
         
-        # Move the start index forward by chunk_size - overlap
-        start += chunk_size - overlap
+    #     # Move the start index forward by chunk_size - overlap
+    #     start += chunk_size - overlap
     
-    return chunks
+    # return chunks
+    
+    splitter = RecursiveCharacterTextSplitter(
+        separators=["\n\n", "\n", " ", ""],
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+    )
+    chunks = splitter.split_text(text)
+    return chunks 
