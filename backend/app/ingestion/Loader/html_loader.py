@@ -18,9 +18,8 @@ def parse_html(file_path : str)->str :
                 script.decompose()
             full_text = soup.get_text(separator="\n")
             #cleans whitespace 
-            lines = (line.strip() for line in text.splitlines())
-            chunks = (phrase.strip() for line in lines for phrase in line.split(" "))
-            text_clean = "\n".join(chunk for chunk in chunks if chunk)
+            lines = [line.strip() for line in full_text.splitlines() if line.strip()]
+            text_clean = "\n".join(lines)
             return text_clean
 
         except Exception as e :

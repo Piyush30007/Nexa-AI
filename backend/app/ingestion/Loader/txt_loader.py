@@ -1,12 +1,12 @@
 import logfire 
-def parse_text(file_path : str):
+def parse_text(file_path : str) -> str:
 
     """
     Parse Plains  text files 
     """
     with logfire.span("Text Parsing(local)" , file_path=file_path):
         try:
-            with open(file_path , 'r' , encoding='utf-8') as f :
+            with open(file_path , 'r' , encoding='utf-8' , errors="ignore") as f :
                 text = f.read()
                 logfire.info(f"Successfully read text file")
                 return text 
