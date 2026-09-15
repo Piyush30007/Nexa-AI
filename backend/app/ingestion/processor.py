@@ -17,6 +17,7 @@ from app.services.embedding import embed_texts, get_embedding_dim
 from app.ingestion.Loader.pdf_loader import parse_pdf
 from app.ingestion.Loader.html_loader import parse_html
 from app.ingestion.Loader.txt_loader import parse_text
+from app.ingestion.Preprocessing.cleaner import preprocess_text
 from app.ingestion.Chunking.splitter import chunk_text
 
 logfire.configure(service_name="enterprise-ingestion-service")
@@ -64,8 +65,14 @@ def process_file(file_path: str, filename: str, source_type: str):
                 logfire.warning(f"No text extracted from {filename} — skipping.")
                 return
 
-            # 2. Chunk text
-            chunks = chunk_text(full_text)
+            # 2. Preprocess text
+            clean_text = preprocess_text(full_text)
+            if not clean_text or not clean_text.strip():
+                logfire.warning(f"Text empty after preprocessing for {filename} — skipping.")
+                return
+
+            # 3. Chunk text
+            chunks = chunk_text(clean_text)
             if not chunks:
                 return
 
