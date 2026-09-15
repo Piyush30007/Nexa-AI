@@ -18,12 +18,12 @@ def _get_ranker() -> Ranker:
             # We use a specific cache directory to avoid permission issues in production
             _ranker = Ranker(cache_dir="/tmp/flashrank")
         except Exception:
-            _ranker = Ranker()
+            _ranker = Ranker(model_name = "ms-marco-MiniLM-L-12-v2")
     return _ranker
 
 
 
-def rerank_documents(query: str, documents: list[str], top_n: int = 5) -> list[str]:
+def rerank_documents(query: str, documents: list[str], top_n: int = 5) -> list[dict]:
     """
     Refines retrieval results by re-scoring documents against the query semantically.
     
@@ -43,17 +43,25 @@ def rerank_documents(query: str, documents: list[str], top_n: int = 5) -> list[s
         
         # FlashRank expects a list of dictionaries with 'id' and 'text'
         passages = [
-            {"id": i, "text": doc}
+            {
+                "id": str(i),
+             
+                "text": str(doc.get("content", ""))
+            }
             for i, doc in enumerate(documents)
         ]
 
         request = RerankRequest(query=query, passages=passages)
         results = ranker.rerank(request)
-        
+        # print("FlashRank raw results:", results)
         # Results are returned sorted by highest semantic score first
         reranked_docs = []
         for res in results[:top_n]:
-            reranked_docs.append(res['text'])
+            original_doc = documents[int(res['id'])]
+            reranked_docs.append({
+                **original_doc,
+                "rerank_score": res["score"]
+            })
 
         duration = time.time() - start_time
         top_score = results[0]['score'] if results else 'N/A'
@@ -63,5 +71,10 @@ def rerank_documents(query: str, documents: list[str], top_n: int = 5) -> list[s
 
     except Exception as e:
         logfire.error(f"❌ [Reranker] Semantic Reranking Failed: {e}")
+        print(f"FlashRank error: {e}")
         # Fallback to the original Qdrant order to ensure the user still gets an answer
-        return documents[:top_n]
+        
+        return [{
+            **doc , 
+            "rerank_score" : None , 
+        } for doc in documents[:top_n]]
