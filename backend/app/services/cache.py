@@ -154,8 +154,9 @@ def generate_response_cache_key(
 
     target_model = model or getattr(settings, "PORTKEY_MODEL", "llama-3.3-70b-versatile") or "llama-3.3-70b-versatile"
     suff_tag = "suff_1" if sufficient else f"suff_0:{normalize_query_for_cache(missing_info)[:32]}"
+    history_digest = hashlib.sha256(history_str.strip().encode("utf-8")).hexdigest()[:16] if history_str and history_str.strip() else "no_hist"
 
-    return f"llm_response:{target_model}:{prompt_version}:{norm_q}:{evidence_digest}:{suff_tag}"
+    return f"llm_response:{target_model}:{prompt_version}:{norm_q}:{evidence_digest}:{suff_tag}:{history_digest}"
 
 
 # ---------------------------------------------------------------------------

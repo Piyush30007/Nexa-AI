@@ -73,9 +73,12 @@ CRITICAL RULES:
    - The message is a farewell (e.g., "bye", "goodbye").
    - The message is a simple pleasantry or expression of gratitude (e.g., "thanks", "thank you", "okay", "great", "got it").
    - The message is a basic agent-identity question (e.g., "who are you?", "what can you do?", "what is your name?").
+   - The user is introducing themselves or making a personal conversational statement without asking for company policies (e.g., "My name is Piyush Singh.", "I work in Engineering.").
+   - The user is asking about user-provided personal facts, statements, or continuity from the CONVERSATION HISTORY (e.g., "What is my name?", "What did I just tell you?", "What did I say earlier?", "What were we discussing?", "Can you remind me what I told you?", "Based on what I said earlier..."), AND does NOT request official company policies, benefits, rules, or procedures.
 
 2. ENTERPRISE / DOCUMENT QUESTIONS:
    - Any question seeking factual, procedural, policy, HR, payroll, schedule, security, or enterprise information MUST generate a standalone retrieval search query.
+   - Even if the user mentions personal details in the query or conversation history (e.g., "I work in Engineering. What are my working hours?" or "What is the company leave policy for me?"), you MUST generate a standalone retrieval search query for the enterprise policy topic (e.g., "employee working hours policy", "company leave policy").
    - NEVER classify an enterprise, policy, or document question as CONVERSATIONAL.
    - When in doubt, ALWAYS prefer retrieval.
 
@@ -132,7 +135,7 @@ OR
         return {
             "current_query": "CONVERSATIONAL",
             "status": "Handling conversationally (using memory)...",
-            "plan": state["plan"] + [
+            "plan": state.get("plan", []) + [
                 "Intent: Conversational/Memory",
                 "Retrieval: Skipped",
             ],
@@ -145,7 +148,7 @@ OR
     return {
         "current_query": decision,
         "status": "Searching for relevant documents...",
-        "plan": state["plan"] + [
+        "plan": state.get("plan", []) + [
             "Intent: Search",
             f"Search Query: {decision}",
         ],

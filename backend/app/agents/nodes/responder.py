@@ -27,12 +27,23 @@ def generate_node(state: AgentState):
 
     if query == "CONVERSATIONAL":
         logfire.info("Generating response using conversation Memory ...")
-        prompt = f"""You are a friendly and helpful assistant for Nexa AI.
+        prompt = f"""You are a helpful assistant for Nexa AI.
 You have access to the conversation history and the latest user message.
-Respond politely and concisely to conversational pleasantries, greetings, farewells, gratitude, or basic agent-identity questions.
+
+SOURCE DEFINITIONS:
+- CONVERSATION HISTORY: Information explicitly provided by the user in this conversation. Use this for continuity, personal context (e.g. user's name, team, or details they previously stated), and previous discussion.
+
+RULES:
+1. For conversational pleasantries, greetings, farewells, gratitude, or basic assistant-identity questions, respond politely and concisely.
+2. For questions about information the user previously provided in this conversation (e.g. "What is my name?", "What did I say earlier?", "What did I tell you my team was?", "What were we discussing?"):
+   - Answer directly and factually using what the user explicitly stated in CONVERSATION HISTORY (e.g. "You mentioned earlier that your name is [Name].").
+   - For questions referring to the user's team, department, role, or group (e.g., "What did I tell you my team was?"), treat terms like team/department/area flexibly based on their stated context (e.g. if the user stated "I work in Engineering.", answer that their team is Engineering).
+   - If the user asks about a personal fact or topic that was truly never mentioned at all in CONVERSATION HISTORY, state that they have not mentioned it yet. Never infer or invent facts about the user.
+3. Conversation history is NEVER official company policy. If the user asks about official company rules, policies, or procedures, let them know you can search company documents for them.
+4. Never invent information absent from the conversation history.
 
 CONVERSATION HISTORY:
-{history_str}
+{history_str if history_str.strip() else "No previous conversation."}
 
 LATEST MESSAGE:
 {user_message}
@@ -51,46 +62,58 @@ LATEST MESSAGE:
 
         if sufficient:
             logfire.info(f"Generating grounded response for query: {query} ...")
-            prompt = f"""You are an enterprise AI assistant answering questions based strictly on official company documentation.
+            prompt = f"""You are an enterprise AI assistant answering questions using official company documentation and conversation context.
 
-TECHNICAL CONTEXT:
+ENTERPRISE EVIDENCE:
 {full_context}
 
 CONVERSATION HISTORY:
-{history_str}
+{history_str if history_str.strip() else "No previous conversation."}
 
 USER QUESTION:
 {user_message}
 
+SOURCE ROLES:
+- ENTERPRISE EVIDENCE: Information retrieved from company documents. This is the sole authority for official company policies, rules, procedures, benefits, working hours, security requirements, etc.
+- CONVERSATION HISTORY: Information explicitly provided by the user in this conversation. Use this for continuity, personal context (e.g. user's name, department, role, or team stated by the user), and resolving references.
+
 RULES:
-1. Answer the user's question directly, accurately, and concisely based ONLY on the provided TECHNICAL CONTEXT.
-2. Do not invent, assume, or extrapolate facts, numbers, dates, or policies not present in the context.
-3. If the context contains the answer, state it clearly and factually.
+1. Answer the user's question directly, accurately, and concisely.
+2. When answering company-policy questions, remain strictly grounded in ENTERPRISE EVIDENCE. Never treat conversation history as official company policy.
+3. When answering personal-memory or user-specific questions, use CONVERSATION HISTORY. Never treat company documents as evidence of personal facts unless the documents actually contain those facts.
+4. When both sources are needed (e.g., the user previously mentioned working in Engineering and asks for working hours), combine both sources with their distinct roles: apply the official policy from Enterprise Evidence to the user's context from Conversation History. Do NOT fabricate department-specific exceptions if absent from Enterprise Evidence.
+5. Do not invent, assume, or extrapolate facts, numbers, dates, or policies absent from both sources.
+6. If the Enterprise Evidence contains the answer, state it clearly and factually.
 """
         else:
             logfire.info(f"Generating evidence-bounded response for insufficient evidence (query: {query}) ...")
             missing_info = state.get("missing_information", "").strip() or "Specific policy details for the requested topic."
-            prompt = f"""You are an enterprise AI assistant answering questions based on official company documentation.
+            prompt = f"""You are an enterprise AI assistant answering questions based on official company documentation and conversation context.
 
 The evidence retrieved from company documentation is INSUFFICIENT to answer the user's question.
 
 USER QUESTION:
 {user_message}
 
-AVAILABLE DOCUMENTATION CONTEXT:
+ENTERPRISE EVIDENCE:
 {full_context if full_context.strip() else "No relevant document excerpts found."}
 
 MISSING INFORMATION IDENTIFIED:
 {missing_info}
 
 CONVERSATION HISTORY:
-{history_str}
+{history_str if history_str.strip() else "No previous conversation."}
 
-CRITICAL RULES:
-1. NEVER invent, fabricate, or assume any facts, policies, schedules, hours, rules, or eligibility criteria.
+SOURCE ROLES:
+- ENTERPRISE EVIDENCE: Official company documents. Sole authority for company policies, rules, benefits, and procedures.
+- CONVERSATION HISTORY: User-provided context and continuity. Sole authority for what the user stated about themselves.
+
+RULES:
+1. Never invent, fabricate, or assume any facts, policies, schedules, hours, rules, or eligibility criteria absent from the documentation.
 2. Formulate a concise, direct, and helpful response that:
-   - Explains what the available documentation DOES establish regarding the topic, if anything relevant is mentioned in the context (e.g. employee policies).
-   - Explains what specific requested information is missing from the documentation (e.g. contractor rules, leave accrual details).
+   - Acknowledges relevant user context from CONVERSATION HISTORY if applicable.
+   - Explains what the available documentation DOES establish regarding the topic, if anything relevant is mentioned in the context (e.g. general employee policies).
+   - Explains what specific requested information is missing from the documentation (e.g. contractor rules, department-specific rules).
    - Explicitly states that the answer cannot be determined from the available documents.
 3. Maintain a professional and objective tone. Do not apologize excessively.
 """
@@ -113,7 +136,7 @@ CRITICAL RULES:
             return {
                 "final_answer": cached_data["answer"],
                 "status": "Response generated successfully.",
-                "plan": state["plan"] + ["Response Cache HIT"],
+                "plan": state.get("plan", []) + ["Response Cache HIT"],
                 "messages": [
                     {
                         "role": "assistant",
@@ -151,7 +174,7 @@ CRITICAL RULES:
                 return {
                     "final_answer": safe_answer,
                     "status": "Blocked by output guardrails.",
-                    "plan": state["plan"] + ["Output Guardrails Blocked"],
+                    "plan": state.get("plan", []) + ["Output Guardrails Blocked"],
                     "documents": [],
                     "sufficient": False,
                     "messages": [
@@ -184,7 +207,7 @@ CRITICAL RULES:
             return {
                 "final_answer": content,
                 "status": "Response generated successfully.",
-                "plan": state["plan"],
+                "plan": state.get("plan", []),
                 "messages": [
                     {
                         "role": "assistant",
