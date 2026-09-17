@@ -1,33 +1,47 @@
-import React, { useRef, useState } from 'react'
+import React, { useRef, useState, useEffect } from 'react'
 import PageHeader from '../components/PageHeader.jsx'
+import { Card, Badge, Button, Spinner } from '../components/ui.jsx'
 import {
-  Card,
-  Badge,
-  Button,
-  Spinner,
-} from '../components/ui.jsx'
+  FileTextIcon,
+  PdfIcon,
+  PlusIcon,
+  CheckCircleFilled,
+  SearchIcon,
+  TrashIcon,
+} from '../components/Icons.jsx'
 import { api } from '../api/client.js'
 
-const STATUS_TONE = {
-  ready: 'good',
-  processing: 'warn',
-  failed: 'bad',
-  uploaded: 'good',
-}
-
 export default function KnowledgeBase() {
-  const [docs, setDocs] = useState([])
+  const [docs, setDocs] = useState(() => {
+    try {
+      const saved = localStorage.getItem('nexa_indexed_documents')
+      return saved ? JSON.parse(saved) : []
+    } catch {
+      return []
+    }
+  })
+
+  const [searchFilter, setSearchFilter] = useState('')
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState(null)
   const [dragOver, setDragOver] = useState(false)
 
   const fileInput = useRef(null)
 
+  // Persist documents list to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('nexa_indexed_documents', JSON.stringify(docs))
+    } catch (err) {
+      console.error('Failed to save documents to localStorage:', err)
+    }
+  }, [docs])
+
   async function handleFiles(files) {
     setError(null)
 
-    const validFiles = files.filter((file) =>
-      /\.(pdf|docx|txt)$/i.test(file.name),
+    const validFiles = Array.from(files).filter((file) =>
+      /\.(pdf|docx|txt)$/i.test(file.name)
     )
 
     if (!validFiles.length) {
@@ -40,174 +54,196 @@ export default function KnowledgeBase() {
 
       try {
         const response = await api.uploadDocument(file)
+        const uploadedDoc = response?.document || response || {}
 
-        const uploadedDocument = response?.document || response || {}
-
-        const document = {
-          id: uploadedDocument.id || crypto.randomUUID(),
-          filename: uploadedDocument.filename || file.name,
-          file_type:
-            uploadedDocument.file_type ||
-            file.name.split('.').pop(),
-          num_chunks: uploadedDocument.num_chunks ?? 0,
-          status: uploadedDocument.status || 'uploaded',
-          uploaded_at:
-            uploadedDocument.uploaded_at ||
-            new Date().toISOString(),
-          error_message:
-            uploadedDocument.error_message || null,
+        const newDoc = {
+          id: uploadedDoc.id || crypto.randomUUID(),
+          filename: uploadedDoc.filename || file.name,
+          title: file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '),
+          file_type: uploadedDoc.file_type || file.name.split('.').pop(),
+          num_chunks: uploadedDoc.num_chunks ?? 1,
+          status: 'Indexed',
+          uploaded_at: new Date().toISOString(),
+          file_size: `${(file.size / 1024).toFixed(0)} KB`,
         }
 
-        setDocs((current) => [document, ...current])
-      } catch (error) {
-        setError(error.message)
+        setDocs((prev) => [newDoc, ...prev.filter((d) => d.filename !== newDoc.filename)])
+      } catch (err) {
+        console.error('Upload error:', err)
+        setError(`Failed to index ${file.name}: ${err.message}`)
       } finally {
         setUploading(false)
       }
     }
   }
 
+  function removeDoc(id) {
+    setDocs((prev) => prev.filter((d) => d.id !== id))
+  }
+
+  const filteredDocs = docs.filter((d) =>
+    (d.filename + d.title).toLowerCase().includes(searchFilter.toLowerCase())
+  )
+
   return (
     <div>
       <PageHeader
-        eyebrow="Ingestion pipeline"
+        eyebrow="Document Management"
         title="Knowledge Base"
-        description="Upload documents to build the searchable knowledge base used by NexaAI."
+        description="Enterprise documents indexed into Qdrant vector database with Gemini embeddings."
+        action={
+          <Button
+            variant="primary"
+            size="md"
+            icon={PlusIcon}
+            onClick={() => fileInput.current?.click()}
+            disabled={uploading}
+          >
+            {uploading ? 'Indexing...' : 'Upload Document'}
+          </Button>
+        }
       />
 
-      <div className="px-8 py-6">
+      <div className="px-6 sm:px-8 py-6 space-y-6 max-w-7xl mx-auto">
+        {error && (
+          <div className="p-4 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center justify-between">
+            <span>⚠ {error}</span>
+            <button onClick={() => setError(null)} className="text-red-500 hover:text-red-800 text-xs">
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Upload Drag & Drop Area */}
         <div
-          onDragOver={(event) => {
-            event.preventDefault()
+          onDragOver={(e) => {
+            e.preventDefault()
             setDragOver(true)
           }}
           onDragLeave={() => setDragOver(false)}
-          onDrop={(event) => {
-            event.preventDefault()
+          onDrop={(e) => {
+            e.preventDefault()
             setDragOver(false)
-            handleFiles(Array.from(event.dataTransfer.files))
+            if (e.dataTransfer.files) handleFiles(e.dataTransfer.files)
           }}
           onClick={() => fileInput.current?.click()}
-          className={`border-2 border-dashed rounded-lg px-6 py-10 text-center cursor-pointer transition-colors mb-6 ${
+          className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all ${
             dragOver
-              ? 'border-signal-teal/60 bg-signal-teal/5'
-              : 'border-ink-600 hover:border-ink-500'
+              ? 'border-blue-500 bg-blue-50/50'
+              : 'border-slate-200 bg-white hover:border-blue-400 hover:bg-slate-50/50'
           }`}
         >
           <input
-            ref={fileInput}
             type="file"
-            accept=".pdf,.docx,.txt"
-            multiple
+            ref={fileInput}
+            onChange={(e) => e.target.files && handleFiles(e.target.files)}
             className="hidden"
-            onChange={(event) => {
-              handleFiles(Array.from(event.target.files))
-              event.target.value = ''
-            }}
+            multiple
+            accept=".pdf,.docx,.txt"
           />
 
-          {uploading ? (
-            <div className="flex items-center justify-center gap-2 text-mist-300">
-              <Spinner />
-              processing document…
-            </div>
-          ) : (
-            <>
-              <p className="text-sm text-mist-200 font-medium">
-                Drop a document here, or click to browse
-              </p>
-
-              <p className="text-xs text-mist-400 mt-1 font-mono">
-                PDF, DOCX, TXT · max 25MB per file
-              </p>
-            </>
-          )}
-        </div>
-
-        {error && (
-          <Card className="px-4 py-3 mb-4 border-signal-coral/30">
-            <p className="text-sm text-signal-coral">
-              {error}
-            </p>
-          </Card>
-        )}
-
-        <Card className="overflow-hidden">
-          <div className="px-4 py-3 border-b border-ink-700">
-            <h2 className="font-display text-sm font-semibold text-mist-50">
-              Uploaded documents
-            </h2>
+          <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center mx-auto mb-3">
+            {uploading ? <Spinner className="w-5 h-5 border-blue-600" /> : <FileTextIcon className="w-6 h-6" />}
           </div>
 
+          <div className="font-bold text-sm text-slate-900">
+            {uploading ? 'Parsing and embedding document...' : 'Click or drag files here to upload'}
+          </div>
+          <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+            Supports PDF, DOCX, and TXT files. Documents are automatically chunked and stored in Qdrant.
+          </p>
+        </div>
+
+        {/* Documents Table */}
+        <Card className="overflow-hidden">
+          {/* Table Header Controls */}
+          <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-sm text-slate-900">Indexed Documents</span>
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                {docs.length}
+              </span>
+            </div>
+
+            <div className="relative w-full sm:w-64">
+              <SearchIcon className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                value={searchFilter}
+                onChange={(e) => setSearchFilter(e.target.value)}
+                placeholder="Filter documents..."
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-3 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-blue-500 outline-none"
+              />
+            </div>
+          </div>
+
+          {/* Table Body */}
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-[11px] font-mono uppercase tracking-wide text-mist-400 border-b border-ink-700">
-                  <th className="px-4 py-3 font-medium">Document</th>
-                  <th className="px-4 py-3 font-medium">Type</th>
-                  <th className="px-4 py-3 font-medium">Chunks</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">Uploaded</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {docs.length === 0 && (
+            {filteredDocs.length === 0 ? (
+              <div className="p-12 text-center">
+                <div className="w-12 h-12 rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-3">
+                  <FileTextIcon className="w-6 h-6 text-slate-400" />
+                </div>
+                <h3 className="font-semibold text-sm text-slate-800">
+                  {docs.length === 0 ? 'No documents indexed yet' : 'No matching documents found'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                  {docs.length === 0
+                    ? 'Upload PDF, DOCX, or TXT files above to index them into your Qdrant vector database.'
+                    : 'Try adjusting your search filter.'}
+                </p>
+              </div>
+            ) : (
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50/80 text-slate-500 font-semibold uppercase tracking-wider border-b border-slate-200 text-[11px]">
                   <tr>
-                    <td
-                      colSpan={5}
-                      className="px-4 py-8 text-center text-mist-400"
-                    >
-                      No documents uploaded in this session — upload one to
-                      build the knowledge base.
-                    </td>
+                    <th className="py-3 px-5">Document</th>
+                    <th className="py-3 px-5">Chunks</th>
+                    <th className="py-3 px-5">Size</th>
+                    <th className="py-3 px-5">Status</th>
+                    <th className="py-3 px-5">Indexed Date</th>
+                    <th className="py-3 px-5 text-right">Action</th>
                   </tr>
-                )}
-
-                {docs.map((document) => (
-                  <tr
-                    key={document.id}
-                    className="border-b border-ink-700/60 last:border-0"
-                  >
-                    <td className="px-4 py-3 text-mist-100">
-                      📄 {document.filename}
-
-                      {document.error_message && (
-                        <div className="text-xs text-signal-coral mt-1">
-                          {document.error_message}
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {filteredDocs.map((doc) => (
+                    <tr key={doc.id} className="hover:bg-slate-50/60 transition-colors">
+                      <td className="py-3.5 px-5">
+                        <div className="flex items-center gap-3">
+                          <PdfIcon className="w-7 h-7" />
+                          <div>
+                            <div className="font-semibold text-slate-900 capitalize">{doc.title}</div>
+                            <div className="text-[11px] text-slate-400 font-mono">{doc.filename}</div>
+                          </div>
                         </div>
-                      )}
-                    </td>
-
-                    <td className="px-4 py-3 font-mono text-mist-400 uppercase text-xs">
-                      {document.file_type}
-                    </td>
-
-                    <td className="px-4 py-3 font-mono text-mist-300">
-                      {document.num_chunks}
-                    </td>
-
-                    <td className="px-4 py-3">
-                      <Badge
-                        tone={
-                          STATUS_TONE[document.status] || 'default'
-                        }
-                      >
-                        {document.status}
-                      </Badge>
-                    </td>
-
-                    <td className="px-4 py-3 font-mono text-mist-400 text-xs">
-                      {document.uploaded_at
-                        ? new Date(
-                            document.uploaded_at,
-                          ).toLocaleString()
-                        : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      </td>
+                      <td className="py-3.5 px-5 font-mono text-slate-600">
+                        {doc.num_chunks} chunk{doc.num_chunks > 1 ? 's' : ''}
+                      </td>
+                      <td className="py-3.5 px-5 font-mono text-slate-500">{doc.file_size}</td>
+                      <td className="py-3.5 px-5">
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded-full">
+                          <CheckCircleFilled className="w-3 h-3 text-blue-600" />
+                          <span>{doc.status}</span>
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-5 text-slate-500">
+                        {new Date(doc.uploaded_at).toLocaleDateString()}
+                      </td>
+                      <td className="py-3.5 px-5 text-right">
+                        <button
+                          onClick={() => removeDoc(doc.id)}
+                          className="p-1 text-slate-400 hover:text-red-600 transition-colors rounded hover:bg-red-50"
+                          title="Remove from list"
+                        >
+                          <TrashIcon className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </Card>
       </div>

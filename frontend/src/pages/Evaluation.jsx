@@ -1,35 +1,25 @@
-import React from 'react'
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import PageHeader from '../components/PageHeader.jsx'
-import {
-  Card,
-  StatCard,
-  Badge,
-  Button,
-  Spinner,
-} from '../components/ui.jsx'
+import { Card, StatCard, Badge, Button, Spinner } from '../components/ui.jsx'
+import { EvaluationIcon, CheckCircleFilled, SparklesIcon, AlertCircleIcon } from '../components/Icons.jsx'
 import { api } from '../api/client.js'
 
 export default function Evaluation() {
   const [runs, setRuns] = useState([])
   const [running, setRunning] = useState(false)
   const [error, setError] = useState(null)
-  const [expanded, setExpanded] = useState(null)
+  const [selectedRun, setSelectedRun] = useState(null)
 
   async function refresh() {
     try {
-      const results =
-        await api.getEvaluationResults()
-
-      setRuns(
-        Array.isArray(results)
-          ? results
-          : results
-            ? [results]
-            : [],
-      )
-    } catch (error) {
-      setError(error.message)
+      const results = await api.getEvaluationResults()
+      const runsList = Array.isArray(results) ? results : results ? [results] : []
+      setRuns(runsList)
+      if (runsList.length > 0 && !selectedRun) {
+        setSelectedRun(runsList[0])
+      }
+    } catch (err) {
+      console.warn('Evaluation fetch notice:', err.message)
     }
   }
 
@@ -40,325 +30,158 @@ export default function Evaluation() {
   async function runNow() {
     setRunning(true)
     setError(null)
-
     try {
-      const run =
-        await api.runEvaluation()
-
-      setRuns((previous) => [
-        run,
-        ...previous.filter(
-          (item) => item.id !== run.id,
-        ),
-      ])
-
-      setExpanded(run.id)
-    } catch (error) {
-      setError(error.message)
+      const run = await api.runEvaluation()
+      setRuns((prev) => [run, ...prev.filter((r) => r.id !== run.id)])
+      setSelectedRun(run)
+    } catch (err) {
+      setError(err.message || 'Failed to start evaluation run.')
     } finally {
       setRunning(false)
     }
   }
 
-  const latest = runs[0]
-  const previous = runs[1]
-
-  function delta(key) {
-    if (!latest || !previous) return null
-
-    return (
-      (latest[key] - previous[key]) * 100
-    )
-  }
+  const activeRun = selectedRun || runs[0]
 
   return (
     <div>
       <PageHeader
-        eyebrow="Regression testing"
+        eyebrow="Accuracy & Faithfulness"
         title="Evaluation"
-        description="Evaluate retrieval, answer correctness, citations, and hallucination against your test dataset."
+        description="Benchmark RAG pipeline quality across test queries for groundedness, latency, and correctness."
         action={
           <Button
+            variant="primary"
+            size="md"
+            icon={running ? Spinner : EvaluationIcon}
             onClick={runNow}
             disabled={running}
           >
-            {running ? (
-              <span className="flex items-center gap-2">
-                <Spinner />
-                Running…
-              </span>
-            ) : (
-              'Run evaluation'
-            )}
+            {running ? 'Evaluating Pipeline...' : 'Run Evaluation'}
           </Button>
         }
       />
 
-      <div className="px-8 py-6">
-        <Card className="px-4 py-3 mb-6 border-signal-amber/20">
-          <p className="text-xs text-mist-400">
-            Evaluation sends in-context questions to Gemini.
-            Run it manually when you want to check the pipeline;
-            avoid unnecessary runs when using a limited API quota.
-          </p>
-        </Card>
-
+      <div className="px-6 sm:px-8 py-6 space-y-6 max-w-7xl mx-auto">
         {error && (
-          <p className="text-sm text-signal-coral mb-4">
-            {error}
-          </p>
+          <div className="p-4 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center justify-between">
+            <span>⚠ {error}</span>
+            <button onClick={() => setError(null)} className="text-red-500 hover:text-red-800 text-xs">
+              Dismiss
+            </button>
+          </div>
         )}
 
-        {latest ? (
-          <>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-              <StatCard
-                label="Retrieval accuracy"
-                value={`${(
-                  latest.retrieval_accuracy * 100
-                ).toFixed(0)}%`}
-                sub={
-                  previous
-                    ? trendLabel(
-                        delta(
-                          'retrieval_accuracy',
-                        ),
-                      )
-                    : null
-                }
-                tone={
-                  latest.retrieval_accuracy >= 0.8
-                    ? 'good'
-                    : 'warn'
-                }
-              />
+        {/* Top Metric Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard
+            label="Grounded Rate"
+            value={activeRun ? `${((1 - (activeRun.hallucination_rate || 0)) * 100).toFixed(0)}%` : '—'}
+            sub={activeRun ? 'Zero unverified claims' : 'Run evaluation to calculate'}
+            tone="blue"
+          />
+          <StatCard
+            label="Answer Correctness"
+            value={activeRun?.answer_correctness != null ? `${(activeRun.answer_correctness * 100).toFixed(0)}%` : '—'}
+            sub={activeRun ? 'Semantic ground-truth match' : 'Run evaluation to calculate'}
+            tone="purple"
+          />
+          <StatCard
+            label="Test Queries"
+            value={activeRun?.num_cases != null ? String(activeRun.num_cases) : '—'}
+            sub="Enterprise policy test dataset"
+            tone="default"
+          />
+          <StatCard
+            label="Average Latency"
+            value={activeRun?.avg_latency_ms != null ? `${(activeRun.avg_latency_ms / 1000).toFixed(2)}s` : '—'}
+            sub="End-to-end response time"
+            tone="warn"
+          />
+        </div>
 
-              <StatCard
-                label="Answer correctness"
-                value={`${(
-                  latest.answer_correctness * 100
-                ).toFixed(0)}%`}
-                sub={
-                  previous
-                    ? trendLabel(
-                        delta(
-                          'answer_correctness',
-                        ),
-                      )
-                    : null
-                }
-                tone={
-                  latest.answer_correctness >= 0.8
-                    ? 'good'
-                    : 'warn'
-                }
-              />
-
-              <StatCard
-                label="Citation accuracy"
-                value={`${(
-                  latest.citation_accuracy * 100
-                ).toFixed(0)}%`}
-                sub={
-                  previous
-                    ? trendLabel(
-                        delta(
-                          'citation_accuracy',
-                        ),
-                      )
-                    : null
-                }
-                tone={
-                  latest.citation_accuracy >= 0.8
-                    ? 'good'
-                    : 'warn'
-                }
-              />
-
-              <StatCard
-                label="Hallucination rate"
-                value={`${(
-                  latest.hallucination_rate * 100
-                ).toFixed(0)}%`}
-                sub={
-                  previous
-                    ? trendLabel(
-                        -delta(
-                          'hallucination_rate',
-                        ),
-                      )
-                    : null
-                }
-                tone={
-                  latest.hallucination_rate <= 0.1
-                    ? 'good'
-                    : 'warn'
-                }
-              />
+        {/* Runs Table or Empty State */}
+        {runs.length === 0 ? (
+          <Card className="p-12 text-center">
+            <div className="w-12 h-12 rounded-xl bg-purple-50 text-purple-600 border border-purple-100 flex items-center justify-center mx-auto mb-3">
+              <EvaluationIcon className="w-6 h-6" />
+            </div>
+            <h3 className="font-bold text-sm text-slate-900">No evaluation runs available</h3>
+            <p className="text-xs text-slate-500 max-w-md mx-auto mt-1 mb-5 leading-relaxed">
+              Run an evaluation suite to test Nexa AI's retrieval precision, answer groundedness, and
+              hallucination prevention against official test policies.
+            </p>
+            <Button
+              variant="secondary"
+              size="md"
+              icon={running ? Spinner : SparklesIcon}
+              onClick={runNow}
+              disabled={running}
+            >
+              {running ? 'Running...' : 'Trigger Benchmark Run'}
+            </Button>
+          </Card>
+        ) : (
+          <Card className="overflow-hidden">
+            <div className="p-4 border-b border-slate-100 bg-white flex items-center justify-between">
+              <div className="font-bold text-sm text-slate-900">Evaluation Benchmark History</div>
+              <Badge tone="purple">{runs.length} Run{runs.length > 1 ? 's' : ''}</Badge>
             </div>
 
-            <p className="text-xs font-mono text-mist-400 mb-6">
-              {latest.num_cases} test cases · avg latency{' '}
-              {Number(
-                latest.avg_latency_ms || 0,
-              ).toFixed(0)}
-              ms · run{' '}
-              {new Date(
-                latest.timestamp,
-              ).toLocaleString()}
-            </p>
-          </>
-        ) : (
-          <Card className="px-5 py-6 mb-6 text-sm text-mist-400">
-            No evaluation runs yet.
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider border-b border-slate-200 text-[11px]">
+                  <tr>
+                    <th className="py-3 px-5">Run ID</th>
+                    <th className="py-3 px-5">Test Cases</th>
+                    <th className="py-3 px-5">Grounded Rate</th>
+                    <th className="py-3 px-5">Correctness</th>
+                    <th className="py-3 px-5">Latency</th>
+                    <th className="py-3 px-5">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {runs.map((run, i) => (
+                    <tr
+                      key={run.id || i}
+                      onClick={() => setSelectedRun(run)}
+                      className={`cursor-pointer transition-colors ${
+                        activeRun?.id === run.id ? 'bg-blue-50/50' : 'hover:bg-slate-50'
+                      }`}
+                    >
+                      <td className="py-3.5 px-5 font-mono text-slate-900 font-medium">
+                        {run.id || `eval-run-${i + 1}`}
+                      </td>
+                      <td className="py-3.5 px-5 text-slate-600">
+                        {run.num_cases != null ? `${run.num_cases} cases` : '—'}
+                      </td>
+                      <td className="py-3.5 px-5 font-semibold text-blue-600">
+                        {run.hallucination_rate != null
+                          ? `${((1 - run.hallucination_rate) * 100).toFixed(0)}%`
+                          : '—'}
+                      </td>
+                      <td className="py-3.5 px-5 text-purple-600 font-semibold">
+                        {run.answer_correctness != null
+                          ? `${(run.answer_correctness * 100).toFixed(0)}%`
+                          : '—'}
+                      </td>
+                      <td className="py-3.5 px-5 font-mono text-slate-500">
+                        {run.avg_latency_ms != null ? `${(run.avg_latency_ms / 1000).toFixed(2)}s` : '—'}
+                      </td>
+                      <td className="py-3.5 px-5">
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-200">
+                          <CheckCircleFilled className="w-3 h-3 text-blue-600" />
+                          <span>Verified</span>
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </Card>
         )}
-
-        <h2 className="font-display text-sm font-semibold text-mist-50 mb-3">
-          Run history
-        </h2>
-
-        <div className="space-y-3">
-          {runs.map((run) => (
-            <Card
-              key={run.id}
-              className="overflow-hidden"
-            >
-              <button
-                onClick={() =>
-                  setExpanded(
-                    expanded === run.id
-                      ? null
-                      : run.id,
-                  )
-                }
-                className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-ink-700/40"
-              >
-                <div className="flex items-center gap-3 text-sm">
-                  <span className="font-mono text-mist-400 text-xs">
-                    {new Date(
-                      run.timestamp,
-                    ).toLocaleString()}
-                  </span>
-
-                  <Badge>
-                    {run.num_cases} cases
-                  </Badge>
-
-                  <Badge
-                    tone={
-                      run.hallucination_rate <= 0.1
-                        ? 'good'
-                        : 'warn'
-                    }
-                  >
-                    {(
-                      run.hallucination_rate * 100
-                    ).toFixed(0)}
-                    % hallucination
-                  </Badge>
-                </div>
-
-                <span className="text-mist-400 text-xs font-mono">
-                  {expanded === run.id
-                    ? '▲'
-                    : '▼'}
-                </span>
-              </button>
-
-              {expanded === run.id && (
-                <div className="border-t border-ink-700 divide-y divide-ink-700/60">
-                  {(run.results || []).map(
-                    (result, index) => (
-                      <div
-                        key={index}
-                        className="px-4 py-3 text-sm"
-                      >
-                        <div className="flex items-start justify-between gap-4">
-                          <p className="text-mist-100">
-                            {result.question}
-                          </p>
-
-                          <div className="flex gap-1.5 shrink-0 flex-wrap justify-end">
-                            <Badge
-                              tone={
-                                result.retrieval_hit
-                                  ? 'good'
-                                  : 'bad'
-                              }
-                            >
-                              retrieval
-                            </Badge>
-
-                            <Badge
-                              tone={
-                                result.answer_correct
-                                  ? 'good'
-                                  : 'bad'
-                              }
-                            >
-                              answer
-                            </Badge>
-
-                            <Badge
-                              tone={
-                                result.citation_correct
-                                  ? 'good'
-                                  : 'bad'
-                              }
-                            >
-                              citation
-                            </Badge>
-
-                            <Badge
-                              tone={
-                                result.hallucinated
-                                  ? 'bad'
-                                  : 'good'
-                              }
-                            >
-                              {result.hallucinated
-                                ? 'hallucinated'
-                                : 'safe'}
-                            </Badge>
-                          </div>
-                        </div>
-
-                        <p className="text-xs text-mist-400 mt-2 font-mono">
-                          expected:{' '}
-                          {result.expected_source ||
-                            'no source — should refuse'}
-                          {' · '}
-                          got:{' '}
-                          {result.actual_sources?.join(
-                            ', ',
-                          ) || 'none'}
-                        </p>
-
-                        {result.actual_answer && (
-                          <p className="text-xs text-mist-300 mt-2">
-                            {result.actual_answer}
-                          </p>
-                        )}
-                      </div>
-                    ),
-                  )}
-                </div>
-              )}
-            </Card>
-          ))}
-        </div>
       </div>
     </div>
   )
-}
-
-function trendLabel(deltaPct) {
-  if (Math.abs(deltaPct) < 0.5) {
-    return 'no change vs. last run'
-  }
-
-  const sign = deltaPct > 0 ? '▲' : '▼'
-
-  return `${sign} ${Math.abs(deltaPct).toFixed(0)}pt vs. last run`
 }

@@ -1,25 +1,20 @@
 @import "tailwindcss";
 
 @theme {
-  --color-ink-950: #09090b;
-  --color-ink-900: #111318;
-  --color-ink-800: #191e26;
-  --color-ink-700: #242b35;
-  --color-ink-600: #2a323d;
-  --color-ink-500: #3a4552;
+  --color-primary-50: #eff6ff;
+  --color-primary-100: #dbeafe;
+  --color-primary-200: #bfdbfe;
+  --color-primary-500: #3b82f6;
+  --color-primary-600: #2563eb;
+  --color-primary-700: #1d4ed8;
 
-  --color-mist-50: #f8fafc;
-  --color-mist-100: #e5e7eb;
-  --color-mist-200: #d1d5db;
-  --color-mist-300: #aeb5c0;
-  --color-mist-400: #89919e;
+  --color-accent-orange: #f97316;
+  --color-accent-orange-light: #fff7ed;
+  --color-accent-purple: #8b5cf6;
+  --color-accent-purple-light: #f5f3ff;
 
-  --color-signal-teal: #3ed0a8;
-  --color-signal-coral: #ff6b6b;
-  --color-signal-indigo: #7b8cf0;
-
-  --font-body: Inter, system-ui, sans-serif;
-  --font-display: Inter, system-ui, sans-serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 html,
@@ -30,24 +25,22 @@ body,
 
 body {
   margin: 0;
-  background: #09090b;
-  color: #e5e7eb;
-  font-family: Inter, system-ui, sans-serif;
+  background-color: #f8fafc;
+  color: #0f172a;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
-  background-image: radial-gradient(
-    circle at 15% 0%,
-    rgba(123, 140, 240, 0.06),
-    transparent 40%
-  );
+  -moz-osx-font-smoothing: grayscale;
 }
 
 ::selection {
-  background: rgba(62, 208, 168, 0.25);
+  background-color: #dbeafe;
+  color: #1e40af;
 }
 
+/* Custom minimal scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -55,16 +48,16 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2a323d;
-  border-radius: 8px;
+  background: #cbd5e1;
+  border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a4552;
+  background: #94a3b8;
 }
 
 :focus-visible {
-  outline: 2px solid #7b8cf0;
+  outline: 2px solid #2563eb;
   outline-offset: 2px;
 }
 
@@ -73,4 +66,4 @@ body {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
-}
+}

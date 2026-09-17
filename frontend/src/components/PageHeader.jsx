@@ -2,28 +2,28 @@ import React from 'react'
 
 export default function PageHeader({ eyebrow, title, description, action }) {
   return (
-    <header className="border-b border-ink-700 px-8 py-6">
-      <div className="flex items-start justify-between gap-6">
+    <header className="bg-white border-b border-slate-200 px-6 sm:px-8 py-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           {eyebrow && (
-            <div className="text-[11px] font-mono uppercase tracking-[0.12em] text-signal-teal mb-2">
+            <div className="text-xs font-semibold uppercase tracking-wider text-blue-600 mb-1">
               {eyebrow}
             </div>
           )}
 
-          <h1 className="font-display text-2xl font-semibold text-mist-50">
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
             {title}
           </h1>
 
           {description && (
-            <p className="text-sm text-mist-400 mt-2 max-w-2xl">
+            <p className="text-sm text-slate-500 mt-1 max-w-3xl">
               {description}
             </p>
           )}
         </div>
 
         {action && (
-          <div className="shrink-0">
+          <div className="shrink-0 flex items-center gap-2">
             {action}
           </div>
         )}
