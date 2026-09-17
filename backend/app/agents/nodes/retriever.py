@@ -16,16 +16,24 @@ def retrieve_node(state: AgentState):
         raw_results = search_enterprise_knowledge(query, limit=15)
         logfire.info(f"Retrieved {len(raw_results)} candidates from Vector DB")
         
-        doc_contents = [doc['content'] for doc in raw_results]
+        # doc_contents = [doc['content'] for doc in raw_results]
         
         with logfire.span("⚖️ Semantic Reranking"):
-            reranked_contents = rerank_documents(query, doc_contents, top_n=5)
+            reranked_contents = rerank_documents(query, raw_results, top_n=5)
+            for doc in reranked_contents:
+                if "score" in doc:
+                    doc["score"] = float(doc["score"])
+
+                if "rerank_score" in doc:
+                    doc["rerank_score"] = float(doc["rerank_score"])
+
             logfire.info("Reranking complete. Kept top 5 most relevant chunks.")
             
-        formatted_docs = [f"CONTENT: {doc}" for doc in reranked_contents]
+        # formatted_docs = [f"CONTENT: {doc['content']}\nSOURCE: {doc['source']}" for doc in reranked_contents]
+        # print("formatted docs:", reranked_contents)
     
     return {
-        "documents": formatted_docs,
+        "documents": reranked_contents,
         "status": f"Found technical context.",
         "plan": state["plan"] + ["Context Retrieved"]
-    }
+    }   

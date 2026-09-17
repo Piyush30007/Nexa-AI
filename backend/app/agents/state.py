@@ -16,5 +16,7 @@ class AgentState(TypedDict):
     plan : List[str]
     status : str
     final_answer : str
-    
+    sufficient : bool 
+    missing_information : str
+    retry_count : int
     
