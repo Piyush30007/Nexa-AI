@@ -21,7 +21,7 @@ from app.config import settings
 #         {"override_params": {"model": f"@{settings.GROQ_SLUG_2}/llama-3.1-8b-instant"}},
 #     ]
 # }
-
+model = settings.PORTKEY_MODEL
 portkey_client = Portkey(
     api_key=settings.PORTKEY_API_KEY,
     config= settings.PORTKEY_CONFIG_ID
@@ -36,7 +36,7 @@ def get_langchain_llm(feature: str = "rag") -> ChatOpenAI:
     return ChatOpenAI(
         api_key="portkey",
         base_url=PORTKEY_GATEWAY_URL,
-        model=f"@{settings.GROQ_SLUG}/openai/gpt-oss-120b",
+        model = settings.PORTKEY_MODEL,
         temperature=0,
         default_headers=createHeaders(
             api_key=settings.PORTKEY_API_KEY,
