@@ -7,7 +7,7 @@ import KnowledgeBase from './pages/KnowledgeBase.jsx'
 import Evaluation from './pages/Evaluation.jsx'
 import Usage from './pages/Usage.jsx'
 import Settings from './pages/Settings.jsx'
-
+// now starting the main 
 export default function App() {
   return (
     <Shell>
