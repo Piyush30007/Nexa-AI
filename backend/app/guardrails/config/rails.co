@@ -12,3 +12,12 @@ flow input rails $input_text
     abort
 
   return
+
+flow output rails $output_text
+  $is_safe = await CheckBotResponseAction(output_text=$output_text)
+
+  if not $is_safe
+    bot say "I cannot provide this response because it contains unverified or sensitive information. Please refer to official company policy documentation."
+    abort
+
+  return

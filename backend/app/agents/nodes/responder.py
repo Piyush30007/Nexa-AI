@@ -3,6 +3,7 @@ from app.config import Settings, settings
 from langchain_groq import ChatGroq
 from app.gateway import portkey_client, get_langchain_llm , extract_cache_status
 from app.services.cache import response_cache, generate_response_cache_key
+from app.guardrails.rails import guard_output
 import logfire 
 
 # llm = ChatGroq(api_key = settings.GROQ_API_KEY , model = settings.GROQ_MODEL 
@@ -131,6 +132,35 @@ CRITICAL RULES:
 
             content = response.content.strip()
             logfire.info("Response generated from model")
+
+            # NeMo Output Guardrail Check
+            guard_context = {
+                "sufficient": state.get("sufficient", False),
+                "documents": state.get("documents", []),
+                "missing_information": state.get("missing_information", ""),
+                "current_query": state.get("current_query", ""),
+            }
+            is_blocked, fallback_message = guard_output(content, context=guard_context)
+
+            if is_blocked:
+                safe_answer = (
+                    fallback_message
+                    or "I cannot provide this response because it contains unverified or sensitive information. Please refer to official company policy documentation."
+                )
+                logfire.warning("🛡️ Output Guardrail blocked the response.")
+                return {
+                    "final_answer": safe_answer,
+                    "status": "Blocked by output guardrails.",
+                    "plan": state["plan"] + ["Output Guardrails Blocked"],
+                    "documents": [],
+                    "sufficient": False,
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "content": safe_answer,
+                        }
+                    ],
+                }
 
             if cache_key is not None:
                 try:
