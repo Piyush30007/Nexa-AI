@@ -1,0 +1,14 @@
+import core
+import guardrails
+
+flow main
+  activate user said something
+
+flow input rails $input_text
+  $is_allowed = await CheckUserUtteranceAction(input_text=$input_text)
+
+  if not $is_allowed
+    bot say "I'm sorry, I can only assist with questions related to the company's policies, documents, and supported financial information."
+    abort
+
+  return
