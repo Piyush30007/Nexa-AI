@@ -21,10 +21,15 @@ class Settings:
     # --- LLM GATEWAY (PORTKEY) ---
     PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY")
     PORTKEY_CONFIG_ID = os.getenv("PORTKEY_CONFIG_ID")
+    PORTKEY_MODEL = os.getenv("PORTKEY_MODEL")
     GROQ_SLUG =  "rag"     # primary: @rag/llama-3.3-70b-versatile
     GROQ_SLUG_2 = "brag"  # fallback: @brag/llama-3.1-8b-instant
 
     
+    # --- CACHING (IN-MEMORY FOR DEV) ---
+    EMBEDDING_CACHE_TTL = int(os.getenv("EMBEDDING_CACHE_TTL", "3600"))
+    RESPONSE_CACHE_TTL = int(os.getenv("RESPONSE_CACHE_TTL", "3600"))
+
     # --- OBSERVABILITY ---
     LANGSMITH_TRACING = os.getenv("LANGSMITH_TRACING", "true")
     LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
