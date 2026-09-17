@@ -3,10 +3,11 @@ import logfire
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 from app.config import settings 
+from app.services.cache import embedding_cache, generate_embedding_cache_key 
 
 BATCH_sIZE = 50
 _GEMINI_DIM = 3072
-_FALLBACK_DIM = 768 
+# _FALLBACK_DIM = 768
 
  
 _active_mmodel = None 
@@ -17,13 +18,14 @@ def  _probe_gemini():
     try :
         model = GoogleGenerativeAIEmbeddings(
             model = "models/gemini-embedding-2-preview",
-            google_api_key = settings.GOOGLE_API_KEY,
+            google_api_key = settings.GEMINI_API_KEY,
         )
         model.embed_query("probe")
         logfire.info("Gemini embedding ready (gemini embedding-2-preview , 3072 dim)")
         return model 
     except Exception as e:
-        logfire.warning(f"Gemini embedding not available, falling back to fallback embedding (768 dim): {e}")
+        # logfire.warning(f"Gemini embedding not available, falling back to fallback embedding (768 dim): {e}")
+        logfire.error(f"Gemini embedding is not available: {e}")
         return None
 
 def  _load_fallback():
@@ -36,12 +38,17 @@ def __init__():
     if _active_mmodel is not None:
         return 
     gemini_model = _probe_gemini()
-    if gemini_model is not None:
-        _active_mmodel = gemini_model
-        _model_type = "gemini"
-    else:
-        _active_mmodel = _load_fallback()
-        _model_type = "fallback"
+    # if gemini_model is not None:
+    #     _active_mmodel = gemini_model
+    #     _model_type = "gemini"
+    # else:
+    #     _active_mmodel = _load_fallback()
+    #     _model_type = "fallback"
+    if gemini_model is None:
+        raise RuntimeError("Gemini Embedding model is unavailable")
+    
+    _active_mmodel = gemini_model 
+    _model_type = "gemini"
 
 def  get_embedding_dim()->int : 
     """
@@ -49,7 +56,8 @@ def  get_embedding_dim()->int :
     """
     __init__()
     
-    return _GEMINI_DIM if _model_type == "gemini" else _FALLBACK_DIM if _model_type == "fallback" else -1
+    # return _GEMINI_DIM if _model_type == "gemini" else _FALLBACK_DIM if _model_type == "fallback" else -1
+    return _GEMINI_DIM
 
 def _embed_batch(batch : list[str])->list[list[float]]:
     
@@ -68,18 +76,25 @@ def _embed_batch(batch : list[str])->list[list[float]]:
                     logfire.error(f"Error embedding batch with Gemini: {e}")
                     raise
                 
-            raise RuntimeError("Gemini rate limit persisted after 4 attempts.")
+        raise RuntimeError("Gemini rate limit persisted after 4 attempts.")
         
     else :
-        return _active_mmodel.encode(batch , show_progress_bar=False).tolist()
-    
+        # return _active_mmodel.encode(batch , show_progress_bar=False).tolist()
+        raise RuntimeError("Gemini Embedding Model is unavailable")
 
 
-def embed_query(query:str)->list[float]:
+def embed_query(query: str) -> list[float]:
+    cache_key = generate_embedding_cache_key(query, model="models/gemini-embedding-2-preview")
+    cached = embedding_cache.get(cache_key)
+    if cached is not None:
+        logfire.info("Embedding Cache HIT")
+        return cached
+
+    logfire.info("Embedding Cache MISS")
     __init__()
-    if _model_type == "gemini":
-        return _active_mmodel.embed_query(query)
-    return _active_mmodel.encode([query] , show_progress_bar=False)[0].tolist()
+    embedding = _active_mmodel.embed_query(query)
+    embedding_cache.set(cache_key, embedding, ttl=settings.EMBEDDING_CACHE_TTL)
+    return embedding
 
 def embed_texts(text : list[str])->list[list[float]]:
     __init__()
