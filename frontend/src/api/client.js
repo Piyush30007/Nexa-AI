@@ -1,12 +1,52 @@
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:8000'
+import { getToken } from '@clerk/react'
+
+const BASE_URL =
+  (typeof import.meta !== 'undefined' && import.meta.env && (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL)) ||
+  'http://localhost:8000'
+
+let customTokenGetter = null
+
+/**
+ * Configure an optional custom token getter (used for testing or custom overrides).
+ */
+export function setAuthTokenGetter(fn) {
+  customTokenGetter = fn
+}
+
+/**
+ * Safely resolves the current Clerk session token.
+ * Returns the JWT token string if signed in, or null for guest requests.
+ * Throws a clear error if token retrieval fails for an active session.
+ */
+async function resolveClerkToken() {
+  try {
+    if (customTokenGetter) {
+      return await customTokenGetter()
+    }
+
+    if (typeof window === 'undefined') {
+      return null
+    }
+
+    const token = await getToken()
+    return token || null
+  } catch (err) {
+    throw new Error(`Authentication token retrieval failed: ${err.message || err}`)
+  }
+}
 
 async function request(path, options = {}) {
   const isFormData = options.body instanceof FormData
+
+  // 1. Resolve Clerk session token for authenticated users
+  const token = await resolveClerkToken()
+  const authHeaders = token ? { Authorization: `Bearer ${token}` } : {}
 
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
     headers: {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+      ...authHeaders,
       ...(options.headers || {}),
     },
   })

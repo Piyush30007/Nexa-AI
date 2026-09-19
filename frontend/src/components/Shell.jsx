@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
+import { Show, SignInButton, SignUpButton, UserButton } from '@clerk/react'
 import {
   NexaLogo,
   DashboardIcon,
@@ -10,7 +11,6 @@ import {
   SettingsIcon,
   SearchIcon,
   BellIcon,
-  ChevronDownIcon,
 } from './Icons.jsx'
 
 export default function Shell({ children }) {
@@ -161,16 +161,34 @@ export default function Shell({ children }) {
               <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-blue-600 rounded-full" />
             </button>
 
-            {/* User Profile */}
-            <div className="flex items-center gap-2.5 pl-2 border-l border-slate-200 cursor-pointer">
-              <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-semibold text-sm flex items-center justify-center shadow-xs">
-                P
-              </div>
-              <div className="hidden sm:block text-left">
-                <div className="text-xs font-semibold text-slate-900 leading-tight">Piyush Singh</div>
-                <div className="text-[10px] text-slate-500 font-normal leading-tight">Admin</div>
-              </div>
-              <ChevronDownIcon className="w-3.5 h-3.5 text-slate-400 hidden sm:block" />
+            {/* Clerk Authentication UI */}
+            <div className="flex items-center pl-2 border-l border-slate-200">
+              <Show when="signed-out">
+                <div className="flex items-center gap-2">
+                  <SignInButton mode="modal">
+                    <button className="px-3 py-1.5 text-xs font-semibold text-slate-700 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer">
+                      Sign In
+                    </button>
+                  </SignInButton>
+                  <SignUpButton mode="modal">
+                    <button className="px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs transition-colors cursor-pointer">
+                      Sign Up
+                    </button>
+                  </SignUpButton>
+                </div>
+              </Show>
+
+              <Show when="signed-in">
+                <div className="flex items-center gap-2">
+                  <UserButton
+                    appearance={{
+                      elements: {
+                        userButtonAvatarBox: 'w-8 h-8 rounded-full shadow-xs',
+                      },
+                    }}
+                  />
+                </div>
+              </Show>
             </div>
           </div>
         </header>
