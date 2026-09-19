@@ -1,18 +1,22 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import (create_engine,Column,String,Integer,Float, DateTime, ForeignKey, Text, JSON)
-from sqlalchemy.orm import (sessionmaker,declarative_base,relationship)
+from sqlalchemy import (create_engine, Column, String, Integer, BigInteger, Float, DateTime, ForeignKey, Text, JSON)
+from sqlalchemy.orm import (sessionmaker, declarative_base, relationship)
 
 from config import settings
 
-#database conenction 
-engine = create_engine( # this engine is uses for creating the connection between our python code and the database 
-    settings.database_url,
+# database connection
+db_url = settings.database_url
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(
+    db_url,
+    pool_pre_ping=True,  # Automatically tests connection validity and reconnects on drops
     connect_args={
-        "check_same_thread": False #allows the SQLite connection to be used across threads.
-    } if settings.database_url.startswith("sqlite") else {}, #here it takes url of database that we have been settup in config file 
-    #Only apply this SQLite-specific option when we're actually using SQLite
+        "check_same_thread": False
+    } if db_url.startswith("sqlite") else {},
 )
 
 SessionLocal = sessionmaker(
@@ -68,7 +72,7 @@ class Chunk(Base):
     document_id = Column(String,ForeignKey("documents.id"),nullable=False )#which document this chunks beliongs to , and foreign key becuase document id must refers to existing document 
 
     # ID used to connect SQLite data with FAISS
-    faiss_id = Column(Integer,  unique=True,  nullable=False, index=True,) #FAISS searches vectors, but your SQLite database stores the actual chunk information. So we need a bridge.
+    faiss_id = Column(BigInteger, unique=True, nullable=False, index=True) # FAISS searches vectors, 64-bit ID bridge
 #above unique = true becuase two chunks cannot have same faiss id 
     chunk_index = Column( Integer, nullable=False, ) #This tells us the order of the chunk inside the document.
 
