@@ -127,20 +127,20 @@ export function MetricCard({
   }
 
   return (
-    <Card className="p-4 flex items-center gap-3.5 hover:border-slate-300 transition-colors">
+    <Card className="p-3.5 sm:p-4 flex items-center gap-3 sm:gap-3.5 hover:border-slate-300 transition-colors min-w-0 overflow-hidden">
       {Icon && (
         <div
-          className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
+          className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shrink-0 border ${
             iconColorStyles[iconColor] || iconColorStyles.blue
           }`}
         >
-          <Icon className="w-5 h-5 shrink-0" />
+          <Icon className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
         </div>
       )}
       <div className="min-w-0 flex-1">
         <div className="text-xs font-medium text-slate-500 truncate">{label}</div>
-        <div className="flex items-baseline gap-2 mt-0.5">
-          <span className="text-xl font-bold text-slate-900 tracking-tight">{value}</span>
+        <div className="flex items-baseline gap-2 mt-0.5 min-w-0">
+          <span className="text-xl font-bold text-slate-900 tracking-tight truncate">{value}</span>
           {trend && (
             <span
               className={`text-[11px] font-semibold flex items-center gap-0.5 ${

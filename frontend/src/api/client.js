@@ -82,6 +82,14 @@ export const api = {
     })
   },
 
+  getDocuments: () =>
+    request('/api/documents'),
+
+  deleteDocument: (documentId) =>
+    request(`/api/documents/${documentId}`, {
+      method: 'DELETE',
+    }),
+
   chat: (question, conversationId = null) =>
     request('/api/chat', {
       method: 'POST',
@@ -98,4 +106,21 @@ export const api = {
 
   getEvaluationResults: () =>
     request('/api/evaluation/results'),
+
+  getConversations: () =>
+    request('/api/conversations'),
+
+  getConversationMessages: (conversationId) =>
+    request(`/api/conversations/${conversationId}/messages`),
+
+  deleteConversation: (conversationId) =>
+    request(`/api/conversations/${conversationId}`, {
+      method: 'DELETE',
+    }),
+
+  renameConversation: (conversationId, title) =>
+    request(`/api/conversations/${conversationId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
 }
