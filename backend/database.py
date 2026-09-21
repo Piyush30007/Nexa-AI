@@ -13,7 +13,7 @@ if db_url.startswith("postgres://"):
 
 engine = create_engine(
     db_url,
-    pool_pre_ping=True,  # Automatically tests connection validity and reconnects on drops
+    pool_pre_ping=True,
     connect_args={
         "check_same_thread": False
     } if db_url.startswith("sqlite") else {},
@@ -93,6 +93,8 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id = Column( String,  primary_key=True,default=_uuid) #default = uuid asigin the unique random values to id which is important for the fronteend 
+
+    user_id = Column(String, nullable=True, index=True)  # Clerk user ownership (NULL for guests)
 
     title = Column( String,default="New conversation",)
 
@@ -205,10 +207,26 @@ def get_db():
 #create database tables 
 
 def init_db():
+    Base.metadata.create_all(bind=engine)
 
-    Base.metadata.create_all(
-        bind=engine
-    )
+    # Safe, non-destructive migration: ensure user_id column exists on conversations
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+        if "conversations" in inspector.get_table_names():
+            existing_columns = [c["name"] for c in inspector.get_columns("conversations")]
+            if "user_id" not in existing_columns:
+                dialect_name = engine.dialect.name
+                with engine.begin() as conn:
+                    if dialect_name == "postgresql":
+                        conn.execute(text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS user_id VARCHAR;"))
+                        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_conversations_user_id ON conversations (user_id);"))
+                    else:
+                        conn.execute(text("ALTER TABLE conversations ADD COLUMN user_id VARCHAR;"))
+                        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_conversations_user_id ON conversations (user_id);"))
+    except Exception:
+        # Non-fatal so temporary connection issues do not crash the app startup
+        pass
 
 
 

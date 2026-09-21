@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash-lite"
 
+    # clerk auth
+    clerk_secret_key: str = ""
+
+
     # database link stuff (resolved relative to BASE_DIR)
     database_url: str = f"sqlite:///{Path(BASE_DIR / 'data' / 'nexaai.db').resolve().as_posix()}"
 

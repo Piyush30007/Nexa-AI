@@ -54,3 +54,6 @@ langfuse                    # Live production monitoring, tracing & user feedbac
 sentence-transformers       # Used by FlashRank reranker internally
 #supabase
 psycopg2-binary
+
+#clerk
+clerk-backend-api
