@@ -12,14 +12,7 @@ import {
 import { api } from '../api/client.js'
 
 export default function KnowledgeBase() {
-  const [docs, setDocs] = useState(() => {
-    try {
-      const saved = localStorage.getItem('nexa_indexed_documents')
-      return saved ? JSON.parse(saved) : []
-    } catch {
-      return []
-    }
-  })
+  const [docs, setDocs] = useState([])
 
   const [searchFilter, setSearchFilter] = useState('')
   const [uploading, setUploading] = useState(false)
@@ -28,24 +21,44 @@ export default function KnowledgeBase() {
 
   const fileInput = useRef(null)
 
-  // Persist documents list to localStorage
+  // Initial load from server (single source of truth)
   useEffect(() => {
+    let isMounted = true
     try {
-      localStorage.setItem('nexa_indexed_documents', JSON.stringify(docs))
-    } catch (err) {
-      console.error('Failed to save documents to localStorage:', err)
+      localStorage.removeItem('nexa_indexed_documents')
+    } catch {}
+
+    api.getDocuments()
+      .then((serverDocs) => {
+        if (isMounted && Array.isArray(serverDocs)) {
+          const formatted = serverDocs.map((doc) => ({
+            ...doc,
+            title: doc.title || (doc.filename || 'Document').replace(/\.[^/.]+$/, '').replace(/_/g, ' '),
+            file_size: doc.file_size || '—',
+          }))
+          setDocs(formatted)
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load documents from server:', err)
+        if (isMounted) {
+          setError(`Failed to load documents from server: ${err.message}`)
+        }
+      })
+    return () => {
+      isMounted = false
     }
-  }, [docs])
+  }, [])
 
   async function handleFiles(files) {
     setError(null)
 
     const validFiles = Array.from(files).filter((file) =>
-      /\.(pdf|docx|txt)$/i.test(file.name)
+      /\.(pdf|docx|txt|pptx|html|htm)$/i.test(file.name)
     )
 
     if (!validFiles.length) {
-      setError('Please upload a PDF, DOCX, or TXT file.')
+      setError('Please upload a PDF, DOCX, TXT, PPTX, or HTML file.')
       return
     }
 
@@ -59,15 +72,15 @@ export default function KnowledgeBase() {
         const newDoc = {
           id: uploadedDoc.id || crypto.randomUUID(),
           filename: uploadedDoc.filename || file.name,
-          title: file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '),
+          title: (uploadedDoc.filename || file.name).replace(/\.[^/.]+$/, '').replace(/_/g, ' '),
           file_type: uploadedDoc.file_type || file.name.split('.').pop(),
           num_chunks: uploadedDoc.num_chunks ?? 1,
-          status: 'Indexed',
-          uploaded_at: new Date().toISOString(),
+          status: uploadedDoc.status || 'Indexed',
+          uploaded_at: uploadedDoc.uploaded_at || new Date().toISOString(),
           file_size: `${(file.size / 1024).toFixed(0)} KB`,
         }
 
-        setDocs((prev) => [newDoc, ...prev.filter((d) => d.filename !== newDoc.filename)])
+        setDocs((prev) => [newDoc, ...prev.filter((d) => d.id !== newDoc.id && d.filename !== newDoc.filename)])
       } catch (err) {
         console.error('Upload error:', err)
         setError(`Failed to index ${file.name}: ${err.message}`)
@@ -77,12 +90,18 @@ export default function KnowledgeBase() {
     }
   }
 
-  function removeDoc(id) {
-    setDocs((prev) => prev.filter((d) => d.id !== id))
+  async function removeDoc(id) {
+    try {
+      await api.deleteDocument(id)
+      setDocs((prev) => prev.filter((d) => d.id !== id))
+    } catch (err) {
+      console.error('Delete error:', err)
+      setError(`Failed to delete document: ${err.message}`)
+    }
   }
 
   const filteredDocs = docs.filter((d) =>
-    (d.filename + d.title).toLowerCase().includes(searchFilter.toLowerCase())
+    ((d.filename || '') + (d.title || '')).toLowerCase().includes(searchFilter.toLowerCase())
   )
 
   return (
