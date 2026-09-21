@@ -10,13 +10,35 @@ load_dotenv()
 logfire.configure(token=os.getenv("LOGFIRE_TOKEN"))
 
 import time
+import shutil
+import uuid
+from pathlib import Path
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
 # Now safe to import app modules - logfire is already active
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Response, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from database import get_db, init_db, Document
+from app.ingestion.processor import (
+    process_file,
+    collection_exists,
+    create_collection,
+    delete_document_points,
+)
+from app.auth.clerk_auth import get_current_user_optional, get_current_user
+from app.services.conversation_service import (
+    resolve_or_create_conversation,
+    save_user_message,
+    save_assistant_message,
+    get_user_conversations,
+    get_conversation_messages,
+    delete_conversation,
+    update_conversation_title,
+)
 from app.agents.graph import rag_agent
 from app.guardrails import initialize_rails, guard
 from app.agents.state import AgentState
@@ -51,6 +73,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup_event():
+    init_db()
     initialize_rails()
 
 
@@ -65,6 +88,10 @@ class QueryRequest(BaseModel):
 class ChatRequest(BaseModel):
     question: str
     conversation_id: Optional[str] = None
+
+
+class RenameConversationRequest(BaseModel):
+    title: str
 
 
 # ============================================================
@@ -132,13 +159,39 @@ def _normalize_sources(raw_docs: List[Any]) -> List[Dict[str, Any]]:
 # ============================================================
 @app.post("/api/chat")
 @app.post("/api/v2/chat")
-def chat(request: ChatRequest):
+def chat(
+    request: ChatRequest,
+    db: Session = Depends(get_db),
+    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+):
     """
-    Frontend-compatible chat endpoint connected to V2 Guardrails and LangGraph.
+    Frontend-compatible chat endpoint connected to V2 Guardrails, LangGraph,
+    and authenticated conversation persistence (Phase 6.2A).
     """
     question = request.question.strip()
-    thread_id = (request.conversation_id or "default_user").strip() or "default_user"
+    thread_id = resolve_or_create_conversation(
+        db=db,
+        conversation_id=request.conversation_id,
+        current_user=current_user,
+    )
     start_time = time.perf_counter()
+
+    # Step 1: For authenticated users, persist user query
+    user_message = None
+    if current_user is not None:
+        try:
+            user_message = save_user_message(
+                db=db,
+                conversation_id=thread_id,
+                content=question,
+            )
+        except Exception as e:
+            db.rollback()
+            logfire.error(f"Failed to persist user message: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="Database error: unable to record user message.",
+            )
 
     try:
         # Gate 1: NeMo Guardrails
@@ -146,6 +199,13 @@ def chat(request: ChatRequest):
         if rail_fired:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
             logfire.info(f"🛡️ Request blocked by guardrails | thread={thread_id}")
+            if current_user is not None:
+                save_assistant_message(
+                    db=db,
+                    conversation_id=thread_id,
+                    content=rail_response,
+                    sources=[],
+                )
             return {
                 "conversation_id": thread_id,
                 "answer": rail_response,
@@ -176,10 +236,20 @@ def chat(request: ChatRequest):
         raw_docs = final_output.get("documents", [])
         normalized_sources = _normalize_sources(raw_docs)
         is_grounded = bool(final_output.get("sufficient") and len(normalized_sources) > 0)
+        final_answer = final_output.get("final_answer") or "I was unable to find relevant information to answer your question."
+
+        # Step 2: For authenticated users, persist assistant response and sources
+        if current_user is not None:
+            save_assistant_message(
+                db=db,
+                conversation_id=thread_id,
+                content=final_answer,
+                sources=normalized_sources,
+            )
 
         return {
             "conversation_id": thread_id,
-            "answer": final_output.get("final_answer") or "I was unable to find relevant information to answer your question.",
+            "answer": final_answer,
             "sources": normalized_sources,
             "grounded": is_grounded,
             "thought_process": final_output.get("plan", []),
@@ -187,9 +257,20 @@ def chat(request: ChatRequest):
             "latency_ms": latency_ms,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
         logfire.error(f"❌ Backend Execution Failed: {e}")
+        # Clean up pending user message on RAG failure to avoid orphaned partial turn
+        if current_user is not None and user_message is not None:
+            try:
+                db.delete(user_message)
+                db.commit()
+            except Exception as cleanup_err:
+                db.rollback()
+                logfire.error(f"Failed to clean up user message after RAG failure: {cleanup_err}")
+
         return {
             "conversation_id": thread_id,
             "answer": "I apologize, but I encountered an internal error while processing your request. Please try again later.",
@@ -199,6 +280,247 @@ def chat(request: ChatRequest):
             "status": "error",
             "latency_ms": latency_ms,
         }
+
+
+# ============================================================
+# CONVERSATIONS HISTORY LISTING (PHASE 6.3A)
+# ============================================================
+@app.get("/api/conversations")
+def list_conversations(
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    List conversation history belonging exclusively to the authenticated Clerk user.
+    Ordered by newest first (created_at DESC, id DESC).
+    """
+    return get_user_conversations(db=db, user_id=current_user["id"])
+
+
+# ============================================================
+# CONVERSATION MESSAGES RETRIEVAL (PHASE 6.3B)
+# ============================================================
+@app.get("/api/conversations/{conversation_id}/messages")
+def get_messages(
+    conversation_id: str,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    Retrieve message history for an authenticated user's conversation.
+    Ordered chronologically (created_at ASC, id ASC).
+    """
+    return get_conversation_messages(
+        db=db,
+        conversation_id=conversation_id,
+        user_id=current_user["id"],
+    )
+
+
+# ============================================================
+# CONVERSATION DELETION (PHASE 6.4)
+# ============================================================
+@app.delete("/api/conversations/{conversation_id}")
+def delete_conversation_endpoint(
+    conversation_id: str,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    Delete an authenticated user's conversation and cascade delete its messages.
+    """
+    return delete_conversation(
+        db=db,
+        conversation_id=conversation_id,
+        user_id=current_user["id"],
+    )
+
+
+# ============================================================
+# CONVERSATION RENAMING (PHASE 8.3)
+# ============================================================
+@app.patch("/api/conversations/{conversation_id}")
+def rename_conversation_endpoint(
+    conversation_id: str,
+    request: RenameConversationRequest,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    Rename an authenticated user's conversation.
+    """
+    return update_conversation_title(
+        db=db,
+        conversation_id=conversation_id,
+        user_id=current_user["id"],
+        title=request.title,
+    )
+
+
+# ============================================================
+# DOCUMENT MANAGEMENT & INGESTION (KNOWLEDGE BASE)
+# ============================================================
+@app.get("/api/documents")
+def list_documents(db: Session = Depends(get_db)):
+    """
+    List all documents indexed in the enterprise knowledge base.
+    """
+    documents = (
+        db.query(Document)
+        .order_by(Document.uploaded_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": d.id,
+            "filename": d.filename,
+            "file_type": d.file_type,
+            "status": d.status,
+            "num_chunks": d.num_chunks,
+            "uploaded_at": d.uploaded_at.isoformat() if d.uploaded_at else None,
+            "error_message": d.error_message,
+        }
+        for d in documents
+    ]
+
+
+@app.post("/api/documents/upload")
+def upload_document(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Ingest a document (PDF, HTML, TXT, DOCX, PPTX) into Qdrant Cloud using Gemini embeddings,
+    and persist metadata in the documents database table.
+    """
+    allowed_extensions = {".pdf", ".html", ".htm", ".txt", ".docx", ".pptx"}
+    filename = file.filename or "uploaded_document"
+    ext = os.path.splitext(filename)[1].lower()
+
+    if ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{ext}'. Supported formats: PDF, HTML, TXT, DOCX, PPTX.",
+        )
+
+    upload_dir = Path("uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    temp_suffix = uuid.uuid4().hex[:8]
+    temp_filename = f"{temp_suffix}_{filename}"
+    file_path = upload_dir / temp_filename
+
+    # Step 1: Save uploaded file to temporary location
+    try:
+        with file_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        logfire.error(f"Failed to save uploaded file {filename}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save uploaded file: {str(e)}",
+        )
+
+    # Step 2: Create PostgreSQL Document record in 'Processing' state before ingestion starts
+    doc = Document(
+        id=str(uuid.uuid4()),
+        filename=filename,
+        file_type=ext.lstrip("."),
+        status="Processing",
+        num_chunks=0,
+        uploaded_at=datetime.now(timezone.utc),
+        error_message=None,
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+
+    # Step 3: Run existing V2 ingestion pipeline and update status
+    try:
+        if not collection_exists():
+            create_collection()
+
+        num_chunks = process_file(
+            file_path=str(file_path),
+            filename=filename,
+            source_type="user_upload",
+            document_id=str(doc.id),
+        )
+
+        if not num_chunks:
+            doc.status = "Failed"
+            doc.num_chunks = 0
+            doc.error_message = "No extractable or indexable content found in document."
+            db.commit()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Document '{filename}' contains no extractable or indexable content.",
+            )
+
+        doc.status = "Indexed"
+        doc.num_chunks = num_chunks
+        doc.error_message = None
+        db.commit()
+        db.refresh(doc)
+
+        return {
+            "id": doc.id,
+            "filename": doc.filename,
+            "file_type": doc.file_type,
+            "num_chunks": doc.num_chunks,
+            "status": doc.status,
+            "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+            "message": f"Document '{filename}' successfully indexed into Qdrant.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logfire.error(f"Error during document ingestion for {filename}: {e}")
+        doc.status = "Failed"
+        doc.error_message = str(e)
+        db.commit()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process and index document: {str(e)}",
+        )
+    finally:
+        # Step 4: Always clean up the temporary uploaded file
+        if file_path.exists():
+            try:
+                file_path.unlink()
+            except Exception as cleanup_err:
+                logfire.warning(f"Could not remove temp file {file_path}: {cleanup_err}")
+
+
+@app.delete("/api/documents/{document_id}")
+def delete_document(
+    document_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Delete an indexed document from the database and remove its vector points from Qdrant.
+    """
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    # Delete points from Qdrant using unique document_id
+    try:
+        delete_document_points(document_id=doc.id)
+    except Exception as e:
+        logfire.error(f"Qdrant deletion failed for document {document_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to clean up document vectors from Qdrant: {str(e)}",
+        )
+
+    # Only delete from DB if Qdrant cleanup succeeded
+    filename = doc.filename
+    db.delete(doc)
+    db.commit()
+
+    return {"message": f"Document '{filename}' successfully deleted."}
+
 
 
 # ============================================================

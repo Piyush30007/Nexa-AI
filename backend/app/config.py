@@ -36,6 +36,18 @@ class Settings:
     LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "rag_scale_test")
     LANGSMITH_ENDPOINT = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
 
+    # --- AUTHENTICATION (CLERK) ---
+    CLERK_SECRET_KEY = os.getenv("CLERK_SECRET_KEY", "")
+    CLERK_AUTHORIZED_PARTIES = [
+        p.strip()
+        for p in os.getenv(
+            "CLERK_AUTHORIZED_PARTIES",
+            "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
+        ).split(",")
+        if p.strip()
+    ]
+
+
 # Apply LangChain environment variables for automatic tracing
 os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGSMITH_TRACING", "true")
 os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGSMITH_API_KEY", "")
