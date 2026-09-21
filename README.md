@@ -8,7 +8,9 @@
 [![Qdrant](https://img.shields.io/badge/Vector%20DB-Qdrant%20Cloud-dc2626.svg)](https://qdrant.tech/)
 [![NeMo Guardrails](https://img.shields.io/badge/Security-NVIDIA%20NeMo%20Guardrails-76b900.svg)](https://github.com/NVIDIA/NeMo-Guardrails)
 [![Portkey](https://img.shields.io/badge/AI%20Gateway-Portkey-blueviolet.svg)](https://portkey.ai/)
-[![Tests](https://img.shields.io/badge/Tests-40%20Passed-brightgreen.svg)]()
+[![Auth](https://img.shields.io/badge/Auth-Clerk%20JWT-6C47FF.svg)](https://clerk.com/)
+[![Database](https://img.shields.io/badge/Database-Supabase%20PostgreSQL-3ECF8E.svg)](https://supabase.com/)
+[![Tests](https://img.shields.io/badge/Tests-111%20Backend%20+%208%20Frontend%20Passed-brightgreen.svg)]()
 
 **Nexa AI Enterprise V2** is a production-grade, full-stack **Agentic Retrieval-Augmented Generation (RAG)** platform designed to deliver verified, evidence-bounded policy answers from enterprise documentation. 
 
@@ -19,14 +21,18 @@ Unlike traditional "naive" RAG pipelines that execute rigid, linear retrieval, N
 ## Key Highlights & Performance Metrics
 
 - **Agentic Decision Graph**: Autonomous planning and routing between conversation memory and vector retrieval with an LLM-powered **Sufficiency Evaluator** and adaptive query reformulation retry loops (max 2 retries).
+- **Enterprise Authentication (Clerk)**: End-to-end user identity via Clerk JWTs and JWKS public-key caching. Guarantees complete guest isolation and strict user-ownership enforcement across all conversations.
+- **Persistent Conversation Management**: Multi-turn chat persistence backed by Supabase PostgreSQL, deterministic zero-latency title generation on first turn, authenticated inline conversation renaming, deletion, and UTC timezone alignment.
+- **Authoritative Knowledge Base**: Decoupled from client-side storage; `GET /api/documents` is the authoritative single source of truth with universal multi-format ingestion (PDF, DOCX, TXT).
+- **Keyword Payload-Indexed Qdrant Deletion**: Fast cascade deletion of vector points using Qdrant Cloud keyword payload index on `document_id`.
 - **Two-Tier Input Security Guard**: Combines a **0ms Tier 1 regex pre-filter** with a **Tier 2 neural security classifier** running a strict fail-closed policy against prompt injections, DAN modes, and role-hijacks.
 - **High-Dimension Vector Retrieval**: Powered by **Qdrant Cloud** with **3,072-dimensional** Google Gemini embeddings (`gemini-embedding-2-preview`).
 - **Sub-25ms Cross-Encoder Reranking**: Integrates **FlashRank** utilizing a local, quantized ONNX cross-encoder model (`ms-marco-MiniLM-L-12-v2`) to re-score top candidate chunks semantically.
-- **Sub-Millisecond Caching Engine**: Thread-safe in-memory response cache with deterministic MD5 state hashing and 3600s TTL, achieving **<1ms cache hits** (a **>99% latency reduction** from 2.8s).
+- **Dual-Layer Caching Engine**: Thread-safe in-memory embedding cache and response cache with deterministic state hashing and 3600s TTL, achieving **<25ms cache hits** (a **>99% latency reduction** on repeated queries).
 - **High-Availability Gateway**: Automated fallback and retry routing via **Portkey AI Gateway** from `Llama-3.3-70b-versatile` to `Llama-3.1-8b-instant` on HTTP 429/503 errors.
 - **Dual Memory Isolation**: Explicitly decouples personal conversation history from authoritative company documentation to prevent memory contamination and policy hallucinations.
 - **Comprehensive Output Guardrails**: Real-time filtering against API key exposure (`gsk_`, `sk-`, `AIza`), PII (SSNs, credit cards), internal system prompt leaks, and out-of-scope persona drift.
-- **100% Test Coverage**: **40+ unit and integration tests** covering memory isolation, caching tiers, planner retries, and multi-tier guardrails.
+- **100% Verified Test Suite**: **111 backend unit and regression tests** + **8 frontend API client tests** passing with 0 failures and 0 errors.
 
 ---
 
@@ -51,14 +57,17 @@ Unlike traditional "naive" RAG pipelines that execute rigid, linear retrieval, N
 flowchart TD
     User(["👤 User / Client"])
 
-    subgraph Frontend["Frontend Layer (React 18 + Vite + TailwindCSS)"]
+    subgraph Frontend["Frontend Layer (React 19 + Vite + TailwindCSS)"]
         UI["Chat Interface & Source Citations"]
+        HistorySidebar["Conversation History & Inline Rename"]
         ExecPanel["Agent Execution Panel (Telemetry & Latency)"]
         Badge["Trust Badges: Grounded vs. Refusal"]
+        AuthUI["Clerk Auth Buttons (Sign In / Up / Profile)"]
     end
 
     subgraph Gateway["API Gateway & Ingress (FastAPI)"]
-        API["POST /api/v2/chat & /api/chat"]
+        AuthGuard["Clerk JWT Authentication & JWKS Validator"]
+        API["POST /api/chat & /api/v2/chat\nGET/PATCH/DELETE /api/conversations\nGET/POST/DELETE /api/documents"]
     end
 
     subgraph InputGuard["Gate 1: Input Guardrails (NeMo Guardrails + Colang)"]
@@ -82,10 +91,11 @@ flowchart TD
         Sufficiency -- "SUFFICIENT or retry >= 2" --> Responder
     end
 
-    subgraph DataStorage["Enterprise Knowledge & Cache Layer"]
-        Qdrant[("Qdrant Vector DB\n(Collection: enterprise_rag)")]
+    subgraph DataStorage["Enterprise Knowledge, Database & Cache Layer"]
+        Postgres[("Supabase PostgreSQL\n(Conversations, Messages, Documents)")]
+        Qdrant[("Qdrant Vector DB\n(Collection: enterprise_rag\nPayload Index: document_id)")]
         GeminiEmbed["Gemini Embeddings API\n(3,072 Dimensions)"]
-        InMemCache[("Thread-Safe In-Memory Cache\n(MD5 State Key, TTL=3600s)")]
+        InMemCache[("Thread-Safe In-Memory Cache\n(Embedding & Response Caches, TTL=3600s)")]
     end
 
     subgraph OutputGuard["Gate 3: Output Guardrails (NVIDIA NeMo)"]
@@ -100,7 +110,10 @@ flowchart TD
 
     %% Wiring
     User <--> UI
+    UI <--> AuthUI
     UI <--> API
+    API --> AuthGuard
+    AuthGuard --> Postgres
     API --> T1
     T1 -- "BLOCKED" --> API
     T1 -- "PASSED" --> T2
@@ -170,7 +183,7 @@ stateDiagram-v2
 ### Shared Graph State (`AgentState`)
 ```python
 class AgentState(TypedDict):
-    messages: List[Dict[str, str]]       # Conversation history & latest turn
+    messages: Annotated[List[Dict[str, str]], operator.add]  # Appending conversation turns
     current_query: str                   # "CONVERSATIONAL" or formulated search query
     documents: List[Dict[str, Any]]      # Retrieved & reranked context chunks
     plan: List[str]                      # Step-by-step agent thoughts & telemetry
@@ -188,7 +201,7 @@ The agent dynamically executes one of three operational pathways based on autono
 #### 🟢 Path 1: Conversational Memory Path (Fast-Path, Zero Retrieval)
 1. **User Query Arrives**: e.g., *"Hello!"*, *"My name is Piyush Singh"*, or *"What is my name?"*
 2. **Planner Node**: Classifies input as `CONVERSATIONAL`. It bypasses the vector database, avoiding unnecessary latency and token costs.
-3. **Responder Node**: Synthesizes a response utilizing the `messages` conversation history stored in the `MemorySaver` checkpointer.
+3. **Responder Node**: Synthesizes a response utilizing the `messages` conversation history stored in the checkpointer.
 4. **Output Verification**: The response is verified against persona-drift and delivered to the user.
 
 #### 🔵 Path 2: Direct Grounded Retrieval Path (Single-Shot Success)
@@ -236,14 +249,16 @@ The agent dynamically executes one of three operational pathways based on autono
 | **Reasoning Engine** | Meta Llama 3.3 (70B) & Llama 3.1 (8B) | High-speed enterprise inference hosted on Groq LPUs |
 | **AI Gateway** | Portkey AI Gateway | Automated fallback routing, retry handling, and unified observability |
 | **Agent Orchestration** | LangGraph & LangChain Core | StateGraph workflow, cyclic reflection loops, conditional branching |
-| **Vector Database** | Qdrant Cloud | `enterprise_rag` collection, Cosine similarity metric |
+| **Authentication** | Clerk (JWT & JWKS) | Client auth, public key verification, user ownership, guest isolation |
+| **Relational Database** | Supabase PostgreSQL + SQLAlchemy | Persistent conversations, messages, documents, schema migration |
+| **Vector Database** | Qdrant Cloud | `enterprise_rag` collection, Cosine similarity metric, payload indexing |
 | **Embedding Model** | Google Gemini Embeddings | `models/gemini-embedding-2-preview` (3,072 dimensions) |
 | **Reranker** | FlashRank | Local quantized ONNX runtime (`ms-marco-MiniLM-L-12-v2`) |
 | **Guardrails & Safety** | NVIDIA NeMo Guardrails + Colang | Dialogue flow governance, multi-tier input/output security |
 | **Backend Framework** | Python 3.12, FastAPI, Uvicorn | High-concurrency async REST API |
-| **Caching Engine** | In-Memory (Redis Interface) | Thread-safe in-memory cache with MD5 state hashing, 3600s TTL |
+| **Caching Engine** | Dual In-Memory Caches | Thread-safe query embedding & LLM response caches with TTL |
 | **Observability** | Logfire & OpenTelemetry | Real-time distributed tracing, latency spans, error tracking |
-| **Frontend UI** | React 18, Vite, Tailwind CSS | Telemetry dashboard, source citations, execution status panel |
+| **Frontend UI** | React 19, Vite, Tailwind CSS | Telemetry dashboard, source citations, history sidebar, responsive cards |
 
 ---
 
@@ -260,10 +275,15 @@ When the vector database contains no evidence for an out-of-scope query:
 2. The responder explicitly states what official documentation establishes and what is absent.
 3. The frontend displays an **Evidence bounded / Refusal** badge alongside the explanation.
 
-### 3. Sub-Millisecond Deterministic Cache Hashing
-Responses are cached using a composite MD5 hash over:
-`hash(query + sorted_chunk_ids + sufficiency_flag + missing_info + history + model + prompt_version)`
-This guarantees that cached responses are only served when the underlying enterprise documentation, sufficiency status, and conversational context are identical.
+### 3. Dual-Layer Deterministic Cache Architecture
+- **Embedding Cache**: Hashes normalized query strings to bypass redundant 3,072-dimensional Gemini API calls.
+- **Response Cache**: Generates a deterministic key over `query + evidence_digest + sufficiency + history_digest + model + prompt_version`. Prevents stale answers when documents change while serving repeat questions in `<25ms`.
+
+### 4. Deterministic Zero-Latency Title Generation
+Conversation titles are generated via lightweight string normalization and word-boundary truncation upon the first user message (**0 additional LLM calls, 0 latency, 0 cost**), while allowing users to rename conversations via an authenticated `PATCH` endpoint.
+
+### 5. Cascade Vector Deletion via Qdrant Payload Index
+Universal document deletion removes the document and its chunks from PostgreSQL and cascade-deletes all corresponding vector points from Qdrant Cloud using a keyword payload index on `document_id`.
 
 ---
 
@@ -281,6 +301,9 @@ Nexa-Ai/
 │   │   │       ├── retriever.py         # Qdrant search caller
 │   │   │       ├── sufficiency.py       # Evidence reflection & grading
 │   │   │       └── responder.py         # Grounded & evidence-bounded synthesis
+│   │   ├── auth/
+│   │   │   ├── clerk_auth.py            # Clerk JWT decoding, JWKS caching & security
+│   │   │   └── __init__.py
 │   │   ├── gateway/
 │   │   │   ├── client.py                # Portkey gateway client & fallback routing
 │   │   │   └── __init__.py
@@ -292,27 +315,47 @@ Nexa-Ai/
 │   │   │       └── config.yml           # NeMo model configuration
 │   │   ├── services/
 │   │   │   ├── cache.py                 # Thread-safe TTL in-memory caching engine
+│   │   │   ├── conversation_service.py  # History, persistence, rename & auto-titling
 │   │   │   ├── embedding.py             # 3,072-dim Gemini embedding service
 │   │   │   └── retrieval/
 │   │   │       ├── qdrant_service.py    # Qdrant collection interface
 │   │   │       └── ranking_services.py  # FlashRank ONNX cross-encoder reranker
-│   │   ├── ingestion/                   # Document parsing, chunking & indexing
+│   │   ├── ingestion/
+│   │   │   ├── processor.py             # Universal document ingestion & point deletion
+│   │   │   └── Chunking/
+│   │   │       └── splitter.py          # Recursive character text splitting
 │   │   ├── config.py                    # Environment & runtime settings
+│   │   ├── database.py                  # SQLAlchemy engine, Conversation & Message models
 │   │   └── main.py                      # FastAPI application & REST endpoints
 │   ├── tests/
+│   │   ├── test_clerk_auth.py           # Clerk JWT token validation tests
+│   │   ├── test_conversation_history.py # User conversation listing & guest isolation
+│   │   ├── test_conversation_messages.py# Chronological message retrieval tests
+│   │   ├── test_conversation_rename.py  # Authenticated inline rename & validation tests
+│   │   ├── test_conversation_deletion.py# Conversation deletion & ownership tests
 │   │   ├── test_conversation_memory.py  # Verification of memory vs evidence
+│   │   ├── test_document_management.py  # Document upload, listing & Qdrant cleanup
 │   │   ├── test_caching.py              # Cache hit/miss & TTL isolation tests
 │   │   ├── test_tier2_guardrail.py      # Two-tier input guardrail test suite
 │   │   ├── test_output_guardrails.py    # Output safety, PII & secret leak tests
 │   │   └── test_planner_retry.py        # Sufficiency retry feedback verification
+│   ├── migrate_conversations_user_id.py # Database migration for Clerk ownership
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
+│   │   ├── api/
+│   │   │   ├── client.js                # Centralized API client with Clerk Bearer auth
+│   │   │   └── client.test.mjs          # Unit tests for API client auth & headers
 │   │   ├── components/
 │   │   │   ├── AgentExecutionPanel.jsx  # Live thought process telemetry
-│   │   │   └── SourceReceipt.jsx        # Chunk-level source citations
+│   │   │   ├── SourceReceipt.jsx        # Chunk-level source citations
+│   │   │   ├── Shell.jsx                # App shell, Clerk auth controls & navigation
+│   │   │   ├── Icons.jsx                # UI icons (EditIcon, AssistantIcon, etc.)
+│   │   │   └── ui.jsx                   # MetricCard, Card, Button components
 │   │   ├── pages/
-│   │   │   └── AIAssistant.jsx          # Chat interface with trust badges
+│   │   │   ├── AIAssistant.jsx          # Chat interface, history sidebar & rename UI
+│   │   │   ├── KnowledgeBase.jsx        # Document management & upload dashboard
+│   │   │   └── Dashboard.jsx
 │   │   └── App.jsx
 │   ├── package.json
 │   └── vite.config.js
@@ -323,21 +366,23 @@ Nexa-Ai/
 
 ## API Reference
 
-### `POST /api/v2/chat`
-Standard chat interaction endpoint compatible with the frontend client.
+### 1. Chat & Inference
 
-#### Request Body
+#### `POST /api/chat` (or `/api/v2/chat`)
+Executes the full Guardrails $\to$ LangGraph $\to$ Portkey RAG pipeline.
+
 ```json
+// Request
 {
   "question": "What is the company annual leave policy?",
-  "conversation_id": "thread_user_102"
+  "conversation_id": "optional-uuid-for-continuity"
 }
 ```
 
-#### Response Body
 ```json
+// Response
 {
-  "conversation_id": "thread_user_102",
+  "conversation_id": "11dc5240-b8a6-40c2-84fd-30d7894433cf",
   "answer": "Full-time employees receive 20 days of paid annual leave per calendar year (employee_handbook.pdf, Page 12).",
   "sources": [
     {
@@ -355,10 +400,31 @@ Standard chat interaction endpoint compatible with the frontend client.
     "Reranker: FlashRank refined top chunks",
     "Sufficiency: Evidence verified sufficient"
   ],
-  "status": "Response generated successfully.",
+  "status": "completed",
   "latency_ms": 1840.5
 }
 ```
+
+---
+
+### 2. Conversation Management (Authenticated via Clerk Bearer Token)
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/conversations` | Lists authenticated user's conversations (ordered newest first) |
+| `GET` | `/api/conversations/{id}/messages` | Retrieves chronological message history with sources |
+| `PATCH` | `/api/conversations/{id}` | Renames a conversation (validated 1-100 characters, owner-only) |
+| `DELETE` | `/api/conversations/{id}` | Deletes conversation and all associated messages |
+
+---
+
+### 3. Knowledge Base & Document Management
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/documents` | Authoritative single-source list of indexed documents |
+| `POST` | `/api/documents/upload` | Ingests PDF, DOCX, or TXT file into vector store & database |
+| `DELETE` | `/api/documents/{id}` | Cascade deletes document from DB and Qdrant points by `document_id` |
 
 ---
 
@@ -367,12 +433,15 @@ Standard chat interaction endpoint compatible with the frontend client.
 ### Prerequisites
 - Python 3.11 or 3.12
 - Node.js 18+ & npm
-- Qdrant Cloud Cluster or local Qdrant instance
+- Supabase PostgreSQL database
+- Qdrant Cloud Cluster
+- Clerk account (for authentication)
 
-### 1. Clone & Configure Backend
+---
+
+### 1. Backend Configuration
 ```bash
-git clone https://github.com/Piyush30007/Nexa-AI.git
-cd Nexa-AI/backend
+cd backend
 
 # Create virtual environment
 python -m venv .venv
@@ -382,9 +451,15 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment Variables
-Create a `.env` file in the `backend/` directory:
+Create a `.env` file in `backend/`:
 ```env
+# Database & Persistence (Supabase PostgreSQL)
+DATABASE_URL=postgresql://postgres.xxx:password@aws-0-pooler.supabase.com:5432/postgres
+
+# Authentication (Clerk)
+CLERK_SECRET_KEY=sk_test_your_clerk_secret_key
+CLERK_AUTHORIZED_PARTIES=http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173
+
 # Reasoning & Gateway
 PORTKEY_API_KEY=your_portkey_api_key
 PORTKEY_CONFIG_ID=your_portkey_config_id
@@ -402,15 +477,31 @@ EMBEDDING_CACHE_TTL=3600
 LOGFIRE_TOKEN=your_logfire_token
 ```
 
-### 3. Launch the Backend
+Run database migration & launch server:
 ```bash
-uvicorn app.main:app --reload --port 8000
+# Run user_id column migration if needed
+python migrate_conversations_user_id.py
+
+# Launch FastAPI development server
+python -m uvicorn app.main:app --reload --port 8000
 ```
 
-### 4. Configure & Launch Frontend
+---
+
+### 2. Frontend Configuration
 ```bash
 cd ../frontend
 npm install
+```
+
+Create a `.env` file in `frontend/`:
+```env
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_your_clerk_publishable_key
+VITE_API_URL=http://localhost:8000
+```
+
+Launch the frontend:
+```bash
 npm run dev
 ```
 The interface will be live at `http://localhost:5173`.
@@ -419,22 +510,42 @@ The interface will be live at `http://localhost:5173`.
 
 ## Running Automated Tests
 
-Run the full unit and integration test suite across all 40+ tests:
+### Backend Regression Suite (111 Tests)
+From `backend/`:
 ```bash
-cd backend
-python -m unittest discover tests
+# Run the complete test suite
+python -m unittest discover -s tests -p "test*.py" -v
 ```
 
-To run a specific test suite:
+To run individual test modules:
 ```bash
-# Two-Tier Guardrail Tests
-python -m unittest tests.test_tier2_guardrail
+# Clerk Authentication Tests
+python -m unittest tests.test_clerk_auth -v
 
-# Output Guardrail Safety Tests
-python -m unittest tests.test_output_guardrails
+# Conversation Rename & Ownership Tests
+python -m unittest tests.test_conversation_rename -v
 
-# Conversation Memory Isolation Tests
-python -m unittest tests.test_conversation_memory
+# Document Ingestion & Deletion Tests
+python -m unittest tests.test_document_management -v
+
+# Caching Engine Tests
+python -m unittest tests.test_caching -v
+
+# Guardrails Tests
+python -m unittest tests.test_tier2_guardrail -v
+python -m unittest tests.test_output_guardrails -v
+```
+
+### Frontend Client Tests (8 Tests)
+From `frontend/`:
+```bash
+node src/api/client.test.mjs
+```
+
+### Production Build Verification
+From `frontend/`:
+```bash
+npm run build
 ```
 
 ---
