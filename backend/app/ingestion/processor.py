@@ -53,25 +53,66 @@ def collection_exists() -> bool:
         raise
 
 
+def create_payload_index(field_name: str = "document_id", field_schema: str = "keyword"):
+    """Create a payload field index in Qdrant (safe and idempotent)."""
+    try:
+        qdrant_request(
+            "PUT",
+            f"/collections/{settings.QDRANT_COLLECTION}/index",
+            json={
+                "field_name": field_name,
+                "field_schema": field_schema,
+            },
+        )
+        logfire.info(
+            f"Ensured payload index on '{field_name}' ({field_schema}) "
+            f"in collection '{settings.QDRANT_COLLECTION}'."
+        )
+    except requests.HTTPError as e:
+        if e.response is not None:
+            if e.response.status_code == 409:
+                logfire.info(
+                    f"Payload index '{field_name}' already exists: {e}"
+                )
+                return
+            if e.response.status_code == 400:
+                err_text = ""
+                try:
+                    err_json = e.response.json()
+                    err_text = str(err_json.get("status", {}).get("error", "")) or str(err_json)
+                except Exception:
+                    err_text = e.response.text or ""
+                err_lower = err_text.lower()
+                if any(phrase in err_lower for phrase in ("already exists", "already configured", "already indexed", "already created")):
+                    logfire.info(
+                        f"Payload index '{field_name}' already exists/configured: {err_text}"
+                    )
+                    return
+        raise
+
+
 def create_collection():
-    """Create the Qdrant collection using the active embedding dimension."""
-    dim = get_embedding_dim()
+    """Create the Qdrant collection using the active embedding dimension and ensure payload index."""
+    if not collection_exists():
+        dim = get_embedding_dim()
 
-    qdrant_request(
-        "PUT",
-        f"/collections/{settings.QDRANT_COLLECTION}",
-        json={
-            "vectors": {
-                "size": dim,
-                "distance": "Cosine",
-            }
-        },
-    )
+        qdrant_request(
+            "PUT",
+            f"/collections/{settings.QDRANT_COLLECTION}",
+            json={
+                "vectors": {
+                    "size": dim,
+                    "distance": "Cosine",
+                }
+            },
+        )
 
-    logfire.info(
-        f"Created collection '{settings.QDRANT_COLLECTION}' "
-        f"({dim}-dim, Cosine)."
-    )
+        logfire.info(
+            f"Created collection '{settings.QDRANT_COLLECTION}' "
+            f"({dim}-dim, Cosine)."
+        )
+
+    create_payload_index(field_name="document_id", field_schema="keyword")
 
 
 def save_processed_locally(data: dict, source_type: str, filename: str) -> str:
@@ -87,7 +128,7 @@ def save_processed_locally(data: dict, source_type: str, filename: str) -> str:
     return dest
 
 
-def process_file(file_path: str, filename: str, source_type: str):
+def process_file(file_path: str, filename: str, source_type: str, document_id: str | None = None):
     """Parse → preprocess → chunk → save locally → embed → index in Qdrant."""
     with logfire.span("Processing File", file=filename, source=source_type):
         try:
@@ -115,13 +156,13 @@ def process_file(file_path: str, filename: str, source_type: str):
                 logfire.warning(
                     f"Skipping unsupported file type: {filename}"
                 )
-                return
+                return 0
 
             if not full_text or not full_text.strip():
                 logfire.warning(
                     f"No text extracted from {filename} — skipping."
                 )
-                return
+                return 0
 
             # 2. Preprocess text
             clean_text = preprocess_text(full_text)
@@ -130,7 +171,7 @@ def process_file(file_path: str, filename: str, source_type: str):
                 logfire.warning(
                     f"Text empty after preprocessing for {filename} — skipping."
                 )
-                return
+                return 0
 
             # 3. Chunk text
             chunks = chunk_text(clean_text)
@@ -139,7 +180,7 @@ def process_file(file_path: str, filename: str, source_type: str):
                 logfire.warning(
                     f"No chunks created for {filename} — skipping."
                 )
-                return
+                return 0
 
             # 4. Save processed metadata locally
             processed_data = {
@@ -147,6 +188,8 @@ def process_file(file_path: str, filename: str, source_type: str):
                 "source_type": source_type,
                 "chunks": chunks,
             }
+            if document_id:
+                processed_data["document_id"] = str(document_id)
 
             local_path = save_processed_locally(
                 processed_data,
@@ -162,18 +205,21 @@ def process_file(file_path: str, filename: str, source_type: str):
             with logfire.span("Vectorizing & Indexing"):
                 embeddings = embed_texts(chunks)
 
-                points = [
-                    {
+                points = []
+                for chunk, vector in zip(chunks, embeddings):
+                    point_payload = {
+                        "text": chunk,
+                        "source": filename,
+                        "source_type": source_type,
+                    }
+                    if document_id:
+                        point_payload["document_id"] = str(document_id)
+
+                    points.append({
                         "id": str(uuid.uuid4()),
                         "vector": vector,
-                        "payload": {
-                            "text": chunk,
-                            "source": filename,
-                            "source_type": source_type,
-                        },
-                    }
-                    for chunk, vector in zip(chunks, embeddings)
-                ]
+                        "payload": point_payload,
+                    })
 
                 qdrant_request(
                     "PUT",
@@ -185,13 +231,37 @@ def process_file(file_path: str, filename: str, source_type: str):
 
                 logfire.info(
                     f"Indexed {len(points)} points to Qdrant "
-                    f"from {filename}."
+                    f"from {filename} (document_id={document_id})."
                 )
+                return len(points)
 
         except Exception as e:
             logfire.error(
                 f"Failed to process {filename}: {e}"
             )
+            raise
+
+
+def delete_document_points(document_id: str):
+    """Delete all points in Qdrant matching the document_id."""
+    if not collection_exists():
+        return
+    create_payload_index(field_name="document_id", field_schema="keyword")
+    qdrant_request(
+        "POST",
+        f"/collections/{settings.QDRANT_COLLECTION}/points/delete",
+        json={
+            "filter": {
+                "must": [
+                    {
+                        "key": "document_id",
+                        "match": {"value": str(document_id)}
+                    }
+                ]
+            }
+        },
+    )
+    logfire.info(f"Deleted Qdrant points for document_id: {document_id}")
 
 
 def process_directory(dir_path: str, source_type: str):
@@ -212,11 +282,16 @@ def process_directory(dir_path: str, source_type: str):
         )
 
         for filename in files:
-            process_file(
-                os.path.join(dir_path, filename),
-                filename,
-                source_type,
-            )
+            try:
+                process_file(
+                    os.path.join(dir_path, filename),
+                    filename,
+                    source_type,
+                )
+            except Exception as e:
+                logfire.error(
+                    f"Error processing {filename} in directory {dir_path}: {e}"
+                )
 
 
 def run_universal_ingestion(
