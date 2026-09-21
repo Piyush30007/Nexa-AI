@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import get_db, init_db, Document
+from database import get_db, init_db, Document, EvaluationRun
 from app.ingestion.processor import (
     process_file,
     collection_exists,
@@ -56,6 +56,7 @@ allowed_origins = [
     for origin in allowed_origins_env.split(",")
     if origin.strip()
 ] if allowed_origins_env else [
+    "https://nexa-ai-v2-pearl.vercel.app",
     "http://localhost:5173",
     "http://localhost:3000",
     "http://127.0.0.1:5173",
@@ -65,6 +66,7 @@ allowed_origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -521,6 +523,71 @@ def delete_document(
 
     return {"message": f"Document '{filename}' successfully deleted."}
 
+
+# ============================================================
+# EVALUATION ENDPOINTS
+# ============================================================
+@app.get("/api/evaluation/results")
+def get_evaluation_results(
+    db: Session = Depends(get_db),
+):
+    """
+    Retrieve latest evaluation benchmark metrics. Returns empty list if no runs exist.
+    """
+    try:
+        run = (
+            db.query(EvaluationRun)
+            .order_by(EvaluationRun.timestamp.desc())
+            .first()
+        )
+        if not run:
+            return []
+
+        return {
+            "id": run.id,
+            "timestamp": run.timestamp.isoformat() if run.timestamp else None,
+            "num_cases": run.num_cases,
+            "retrieval_accuracy": run.retrieval_accuracy,
+            "answer_correctness": run.answer_correctness,
+            "citation_accuracy": run.citation_accuracy,
+            "hallucination_rate": run.hallucination_rate,
+            "avg_latency_ms": run.avg_latency_ms,
+            "results": run.results or [],
+        }
+    except Exception as e:
+        logfire.error(f"Failed to fetch evaluation results: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch evaluation results: {str(e)}",
+        )
+
+
+@app.post("/api/evaluation/run")
+def trigger_evaluation(
+    db: Session = Depends(get_db),
+):
+    """
+    Execute the RAG evaluation benchmark suite against the test dataset.
+    """
+    try:
+        from evaluation import run_evaluation
+        result = run_evaluation(db)
+        return {
+            "message": "Evaluation completed",
+            "id": getattr(result, "id", None),
+            "num_cases": getattr(result, "num_cases", 0),
+            "retrieval_accuracy": getattr(result, "retrieval_accuracy", 0.0),
+            "answer_correctness": getattr(result, "answer_correctness", 0.0),
+            "citation_accuracy": getattr(result, "citation_accuracy", 0.0),
+            "hallucination_rate": getattr(result, "hallucination_rate", 0.0),
+            "avg_latency_ms": getattr(result, "avg_latency_ms", 0.0),
+        }
+    except Exception as e:
+        logfire.error(f"Evaluation execution failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Evaluation failed: {str(e)}",
+        )
 
 
 # ============================================================

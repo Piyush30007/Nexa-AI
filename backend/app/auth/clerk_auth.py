@@ -14,14 +14,37 @@ def get_clerk_client(secret_key: Optional[str] = None) -> Clerk:
     return Clerk(bearer_auth=key or "")
 
 
-def get_authenticate_options() -> AuthenticateRequestOptions:
+from urllib.parse import urlparse
+
+
+def get_authenticate_options(request: Optional[Request] = None) -> AuthenticateRequestOptions:
     """
     Build AuthenticateRequestOptions with configured authorized parties
     supporting localhost development and extensible Vercel/production environments.
     """
-    authorized_parties: Optional[List[str]] = (
-        getattr(settings, "CLERK_AUTHORIZED_PARTIES", None) or None
-    )
+    configured_parties = getattr(settings, "CLERK_AUTHORIZED_PARTIES", None)
+
+    # If configured as wildcard "*" or empty, disable azp origin checking
+    if configured_parties is None or "*" in configured_parties or (isinstance(configured_parties, list) and len(configured_parties) == 0):
+        return AuthenticateRequestOptions(authorized_parties=None)
+
+    authorized_parties = list(configured_parties)
+
+    # Dynamic origin resolution: If the request originated from a trusted Vercel deployment
+    # or localhost, ensure it is included so preview URLs and dynamic subdomains do not fail.
+    if request is not None and hasattr(request, "headers"):
+        origin = request.headers.get("origin")
+        if not origin and request.headers.get("referer"):
+            parsed = urlparse(request.headers.get("referer", ""))
+            if parsed.scheme and parsed.netloc:
+                origin = f"{parsed.scheme}://{parsed.netloc}"
+
+        if origin and origin not in authorized_parties:
+            parsed_origin = urlparse(origin)
+            hostname = parsed_origin.hostname or ""
+            if hostname.endswith(".vercel.app") or hostname in ("localhost", "127.0.0.1"):
+                authorized_parties.append(origin)
+
     return AuthenticateRequestOptions(authorized_parties=authorized_parties)
 
 
@@ -80,7 +103,7 @@ def get_current_user_optional(request: Request) -> Optional[Dict[str, Any]]:
     # 3. Authenticate token using official Clerk SDK
     try:
         client = get_clerk_client()
-        options = get_authenticate_options()
+        options = get_authenticate_options(request)
         state = client.authenticate_request(request, options)
 
         if not state.is_signed_in:

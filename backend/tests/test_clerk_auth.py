@@ -166,6 +166,20 @@ class TestClerkAuthSecurity(unittest.TestCase):
         self.assertIsNotNone(opts.authorized_parties)
         self.assertIn("http://localhost:5173", opts.authorized_parties)
 
+    def test_dynamic_vercel_origin_in_authorized_parties(self):
+        """Incoming requests from .vercel.app origins are automatically included."""
+        req = DummyRequest(headers={"origin": "https://nexa-ai-preview-abc.vercel.app"})
+        opts = get_authenticate_options(req)
+        self.assertIsNotNone(opts.authorized_parties)
+        self.assertIn("https://nexa-ai-preview-abc.vercel.app", opts.authorized_parties)
+
+    @patch("app.auth.clerk_auth.settings")
+    def test_wildcard_authorized_parties(self, mock_settings):
+        """When CLERK_AUTHORIZED_PARTIES contains '*', authorized_parties is None."""
+        mock_settings.CLERK_AUTHORIZED_PARTIES = ["*"]
+        opts = get_authenticate_options()
+        self.assertIsNone(opts.authorized_parties)
+
 
 if __name__ == "__main__":
     unittest.main()

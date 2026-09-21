@@ -42,7 +42,7 @@ class Settings:
         p.strip()
         for p in os.getenv(
             "CLERK_AUTHORIZED_PARTIES",
-            "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
+            "https://nexa-ai-v2-pearl.vercel.app,http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000"
         ).split(",")
         if p.strip()
     ]
