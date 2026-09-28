@@ -15,6 +15,7 @@ langchain-google-genai      # LangChain integration for Gemini models
 # --- VECTOR DB & RETRIEVAL ---
 qdrant-client               # Vector Database for semantic search
 flashrank                   # Ultra-fast local cross-encoder for semantic reranking
+rank-bm25                   # BM25 algorithm for lexical/keyword sparse retrieval in Hybrid Search
 
 # --- LANGCHAIN & AGENTIC ORCHESTRATION ---
 langchain                   # Core LLM orchestration
