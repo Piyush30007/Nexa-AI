@@ -1,20 +1,21 @@
 import logfire
 from app.agents.state import AgentState
-from app.services.retrieval.qdrant_service import search_enterprise_knowledge
+from app.services.retrieval.hybrid_service import hybrid_retrieve
 from app.services.retrieval.ranking_services import rerank_documents
 
 def retrieve_node(state: AgentState):
     """
-    Performs vector search and semantic reranking for technical queries.
+    Performs hybrid retrieval (Dense Qdrant + Sparse BM25 with RRF)
+    and FlashRank semantic reranking for technical queries.
     """
     query = state["current_query"]
     
     
-    # Standard Retrieval Logic
-    with logfire.span("🔍 Knowledge Retrieval"):
-        logfire.info(f"Searching Qdrant for: {query}")
-        raw_results = search_enterprise_knowledge(query, limit=15)
-        logfire.info(f"Retrieved {len(raw_results)} candidates from Vector DB")
+    # Hybrid Retrieval Logic (Dense Vector + BM25 Sparse + RRF)
+    with logfire.span("🔍 Knowledge Retrieval (Hybrid: Qdrant + BM25)"):
+        logfire.info(f"Executing hybrid retrieval for: {query}")
+        raw_results = hybrid_retrieve(query, limit=15)
+        logfire.info(f"Retrieved {len(raw_results)} fused candidates (Dense + BM25)")
         
         # doc_contents = [doc['content'] for doc in raw_results]
         
