@@ -28,7 +28,7 @@ Unlike traditional "naive" RAG pipelines that execute rigid, linear retrieval, N
 - **Two-Tier Input Security Guard**: Combines a **0ms Tier 1 regex pre-filter** with a **Tier 2 neural security classifier** running a strict fail-closed policy against prompt injections, DAN modes, and role-hijacks.
 - **High-Dimension Vector Retrieval**: Powered by **Qdrant Cloud** with **3,072-dimensional** Google Gemini embeddings (`gemini-embedding-2-preview`).
 - **Sub-25ms Cross-Encoder Reranking**: Integrates **FlashRank** utilizing a local, quantized ONNX cross-encoder model (`ms-marco-MiniLM-L-12-v2`) to re-score top candidate chunks semantically.
-- **Dual-Layer Caching Engine**: Thread-safe in-memory embedding cache and response cache with deterministic state hashing and 3600s TTL, achieving **<25ms cache hits** (a **>99% latency reduction** on repeated queries).
+- **Hybrid Caching Engine**: Two-tier caching combining an **L1 exact match cache** (<1ms) with an **L2 in-memory semantic cache** (cosine similarity $\ge 0.94$) and query embedding cache, achieving **<25ms hits** on exact and rephrased queries.
 - **High-Availability Gateway**: Automated fallback and retry routing via **Portkey AI Gateway** from `Llama-3.3-70b-versatile` to `Llama-3.1-8b-instant` on HTTP 429/503 errors.
 - **Dual Memory Isolation**: Explicitly decouples personal conversation history from authoritative company documentation to prevent memory contamination and policy hallucinations.
 - **Comprehensive Output Guardrails**: Real-time filtering against API key exposure (`gsk_`, `sk-`, `AIza`), PII (SSNs, credit cards), internal system prompt leaks, and out-of-scope persona drift.
@@ -256,7 +256,7 @@ The agent dynamically executes one of three operational pathways based on autono
 | **Reranker** | FlashRank | Local quantized ONNX runtime (`ms-marco-MiniLM-L-12-v2`) |
 | **Guardrails & Safety** | NVIDIA NeMo Guardrails + Colang | Dialogue flow governance, multi-tier input/output security |
 | **Backend Framework** | Python 3.12, FastAPI, Uvicorn | High-concurrency async REST API |
-| **Caching Engine** | Dual In-Memory Caches | Thread-safe query embedding & LLM response caches with TTL |
+| **Caching Engine** | Hybrid In-Memory Caches | Thread-safe embedding cache, L1 exact response cache & L2 vectorized semantic cache |
 | **Observability** | Logfire & OpenTelemetry | Real-time distributed tracing, latency spans, error tracking |
 | **Frontend UI** | React 19, Vite, Tailwind CSS | Telemetry dashboard, source citations, history sidebar, responsive cards |
 
@@ -275,9 +275,11 @@ When the vector database contains no evidence for an out-of-scope query:
 2. The responder explicitly states what official documentation establishes and what is absent.
 3. The frontend displays an **Evidence bounded / Refusal** badge alongside the explanation.
 
-### 3. Dual-Layer Deterministic Cache Architecture
+### 3. Hybrid Two-Tier Cache Architecture
 - **Embedding Cache**: Hashes normalized query strings to bypass redundant 3,072-dimensional Gemini API calls.
-- **Response Cache**: Generates a deterministic key over `query + evidence_digest + sufficiency + history_digest + model + prompt_version`. Prevents stale answers when documents change while serving repeat questions in `<25ms`.
+- **Tier 1 (L1 Exact Cache)**: Hashes query, evidence digest, sufficiency, and history fingerprint for sub-millisecond instant returns on repeated questions.
+- **Tier 2 (L2 Semantic Cache)**: Evaluates vectorized cosine similarity ($\ge 0.94$) over query embeddings for rephrased queries with identical intent, automatically scoped to matching multi-turn conversation context.
+- **Automatic Invalidation**: Clears cached responses on document ingestion or deletion to eliminate stale answers.
 
 ### 4. Deterministic Zero-Latency Title Generation
 Conversation titles are generated via lightweight string normalization and word-boundary truncation upon the first user message (**0 additional LLM calls, 0 latency, 0 cost**), while allowing users to rename conversations via an authenticated `PATCH` endpoint.
@@ -474,6 +476,9 @@ QDRANT_API_KEY=your_qdrant_api_key
 # Caching & Observability
 RESPONSE_CACHE_TTL=3600
 EMBEDDING_CACHE_TTL=3600
+SEMANTIC_CACHE_ENABLED=true
+SEMANTIC_CACHE_THRESHOLD=0.94
+SEMANTIC_CACHE_MAX_ENTRIES=1000
 LOGFIRE_TOKEN=your_logfire_token
 ```
 
