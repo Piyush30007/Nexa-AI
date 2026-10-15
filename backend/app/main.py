@@ -42,6 +42,7 @@ from app.services.conversation_service import (
 from app.agents.graph import rag_agent
 from app.guardrails import initialize_rails, guard
 from app.agents.state import AgentState
+from app.services.cache import response_cache, semantic_cache
 
 
 # Initialize FastAPI
@@ -464,6 +465,10 @@ def upload_document(
         db.commit()
         db.refresh(doc)
 
+        # Invalidate response caches so answers reflect newly added knowledge
+        response_cache.clear()
+        semantic_cache.clear()
+
         return {
             "id": doc.id,
             "filename": doc.filename,
@@ -520,6 +525,10 @@ def delete_document(
     filename = doc.filename
     db.delete(doc)
     db.commit()
+
+    # Invalidate response caches so answers reflect removed knowledge
+    response_cache.clear()
+    semantic_cache.clear()
 
     return {"message": f"Document '{filename}' successfully deleted."}
 
