@@ -12,8 +12,10 @@ from unittest.mock import patch, MagicMock
 from app.config import settings
 from app.services.cache import (
     InMemoryCache,
+    SemanticCache,
     embedding_cache,
     response_cache,
+    semantic_cache,
     normalize_query_for_cache,
     generate_embedding_cache_key,
     generate_response_cache_key,
@@ -307,6 +309,84 @@ class TestLLMResponseCache(unittest.TestCase):
         self.assertIn("Response Cache HIT", res2["plan"])
         # Latency of request 2 is calculated freshly and is non-negative
         self.assertGreaterEqual(latency_2, 0.0)
+
+
+class TestSemanticCache(unittest.TestCase):
+    """
+    Tests covering Semantic Cache:
+    - Similar vector similarity HIT (>= 0.94)
+    - Dissimilar vector similarity MISS (< 0.94)
+    - Conversation history digest isolation
+    - TTL expiration handling
+    - FIFO eviction when capacity is reached
+    """
+
+    def setUp(self):
+        semantic_cache.clear()
+
+    def test_similar_vector_triggers_semantic_hit(self):
+        # Create a base vector
+        v1 = [1.0] + [0.0] * 3071
+        payload = {"answer": "Company PTO is 20 days per year.", "grounded": True}
+        semantic_cache.set(query_vector=v1, value=payload, history_digest="hist_1")
+
+        # Create a very similar vector (cosine similarity ~0.999)
+        v2 = [0.999, 0.01] + [0.0] * 3070
+        hit = semantic_cache.search(query_vector=v2, history_digest="hist_1")
+
+        self.assertIsNotNone(hit)
+        val, score = hit
+        self.assertEqual(val["answer"], payload["answer"])
+        self.assertGreaterEqual(score, 0.94)
+
+    def test_dissimilar_vector_triggers_semantic_miss(self):
+        v1 = [1.0] + [0.0] * 3071
+        payload = {"answer": "Remote work allowed 2 days a week.", "grounded": True}
+        semantic_cache.set(query_vector=v1, value=payload, history_digest="hist_1")
+
+        # Create an orthogonal vector (cosine similarity = 0.0)
+        v_diff = [0.0, 1.0] + [0.0] * 3070
+        hit = semantic_cache.search(query_vector=v_diff, history_digest="hist_1")
+
+        self.assertIsNone(hit)
+
+    def test_conversation_history_digest_isolates_contexts(self):
+        v1 = [1.0] + [0.0] * 3071
+        payload = {"answer": "Context A answer", "grounded": True}
+        semantic_cache.set(query_vector=v1, value=payload, history_digest="context_a")
+
+        # Same vector, but different conversation history
+        hit = semantic_cache.search(query_vector=v1, history_digest="context_b")
+        self.assertIsNone(hit)
+
+    def test_ttl_expiration(self):
+        cache = SemanticCache(default_ttl=1, threshold=0.90, name="test_ttl_cache")
+        v = [1.0] + [0.0] * 3071
+        cache.set(query_vector=v, value={"answer": "Expiring soon"}, ttl=1)
+
+        time.sleep(1.1)
+        hit = cache.search(query_vector=v)
+        self.assertIsNone(hit)
+
+    def test_fifo_eviction_at_max_entries(self):
+        cache = SemanticCache(max_entries=2, threshold=0.80, name="test_fifo_cache")
+        v1 = [1.0, 0.0] + [0.0] * 3070
+        v2 = [0.0, 1.0] + [0.0] * 3070
+        v3 = [0.0, 0.0, 1.0] + [0.0] * 3069
+
+        cache.set(v1, {"answer": "First"})
+        cache.set(v2, {"answer": "Second"})
+        self.assertEqual(len(cache), 2)
+
+        # Adding 3rd should evict v1 (FIFO)
+        cache.set(v3, {"answer": "Third"})
+        self.assertEqual(len(cache), 2)
+
+        hit1 = cache.search(v1)
+        self.assertIsNone(hit1)  # Evicted
+
+        hit3 = cache.search(v3)
+        self.assertIsNotNone(hit3)
 
 
 if __name__ == "__main__":
