@@ -2,10 +2,11 @@ from app.agents.state import AgentState
 from app.config import Settings, settings
 from langchain_groq import ChatGroq
 from app.gateway import portkey_client, get_langchain_llm , extract_cache_status
-from app.services.cache import response_cache, generate_response_cache_key
+from app.services.cache import response_cache, generate_response_cache_key , semantic_cache 
 from app.guardrails.rails import guard_output
 import logfire 
-
+import hashlib
+from app.services.embedding import embed_query
 # llm = ChatGroq(api_key = settings.GROQ_API_KEY , model = settings.GROQ_MODEL 
 #                , temperature = 0.2 , max_output_tokens = 2000)
 
@@ -153,7 +154,28 @@ RULES:
                     }
                 ]
             }
+        if getattr(settings , "SEMANTIC_CACHE_ENABLED" , True):
+            query_vector = embed_query(query)
+            history_digest = hashlib.sha256(history_str.encode("utf-8")).hexdigest()[:16] if history_str.strip() else "no_hist"
 
+            semantic_hit = semantic_cache.search(query_vector , history_digest=history_digest)
+
+            if semantic_hit is not None:
+                
+                cached_data , sim_score = semantic_hit
+                logfire.info(f"LLM Semantic Cache HIT Similarity Score : {sim_score:.3f}")
+                return {
+                    "final_answer": cached_data["answer"],
+                    "status": "Response generated successfully.",
+                    "plan": state.get("plan", []) + [f"Semantic Cache HIT (Score:{sim_score:.2f})"]  ,
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "content": cached_data["answer"]
+                        }
+                    ]
+                }
+            
         logfire.info("LLM Response Cache MISS")
 
     with logfire.span("Generating Response"):
@@ -212,6 +234,23 @@ RULES:
                     },
                     ttl=settings.RESPONSE_CACHE_TTL
                 )
+
+                # Also commit to Semantic Cache if grounded
+                if getattr(settings, "SEMANTIC_CACHE_ENABLED", True) and is_grounded:
+                    query_vector = embed_query(query)
+                    # this history  digest creates a 16 char sha256 fingerprint of previous message this ensure answers are only matched within the same conversation topic 
+                    history_digest = hashlib.sha256(history_str.encode("utf-8")).hexdigest()[:16] if history_str.strip() else "no_hist"
+                    # save into the semantic cache 
+                    semantic_cache.set(
+                        query_vector=query_vector,
+                        value={
+                            "answer": content,
+                            "sources": normalized_sources,
+                            "grounded": is_grounded,
+                        },
+                        history_digest=history_digest,
+                        ttl=settings.RESPONSE_CACHE_TTL
+                    )
             
             return {
                 "final_answer": content,
