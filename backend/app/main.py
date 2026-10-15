@@ -511,15 +511,17 @@ def delete_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
 
-    # Delete points from Qdrant using unique document_id
-    try:
-        delete_document_points(document_id=doc.id)
-    except Exception as e:
-        logfire.error(f"Qdrant deletion failed for document {document_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to clean up document vectors from Qdrant: {str(e)}",
-        )
+    # Only clean up Qdrant vector points if the document has indexed chunks
+    has_vectors = bool((doc.num_chunks and doc.num_chunks > 0) or doc.status == "Indexed")
+    if has_vectors:
+        try:
+            delete_document_points(document_id=doc.id)
+        except Exception as e:
+            logfire.error(f"Qdrant deletion failed for document {document_id}: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to clean up document vectors from Qdrant: {str(e)}",
+            )
 
     # Only delete from DB if Qdrant cleanup succeeded
     filename = doc.filename

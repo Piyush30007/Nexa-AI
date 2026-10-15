@@ -2,6 +2,7 @@ import os
 import sys
 import uuid
 import json
+import time
 import requests
 import logfire
 
@@ -20,23 +21,31 @@ logfire.configure(service_name="enterprise-ingestion-service")
 PROCESSED_DATA_DIR = "processed_data"
 
 
-def qdrant_request(method: str, path: str, **kwargs):
-    """Send a request to Qdrant Cloud REST API."""
+def qdrant_request(method: str, path: str, max_retries: int = 2, **kwargs):
+    """Send a request to Qdrant Cloud REST API with automatic retry on connection drops."""
     url = f"{settings.QDRANT_URL}{path}"
 
     headers = kwargs.pop("headers", {})
     headers["api-key"] = settings.QDRANT_API_KEY
 
-    response = requests.request(
-        method,
-        url,
-        headers=headers,
-        timeout=30,
-        **kwargs,
-    )
-
-    response.raise_for_status()
-    return response.json()
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.request(
+                method,
+                url,
+                headers=headers,
+                timeout=30,
+                **kwargs,
+            )
+            response.raise_for_status()
+            return response.json()
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            last_exc = e
+            if attempt < max_retries:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            raise last_exc
 
 
 def collection_exists() -> bool:
@@ -246,7 +255,6 @@ def delete_document_points(document_id: str):
     """Delete all points in Qdrant matching the document_id."""
     if not collection_exists():
         return
-    create_payload_index(field_name="document_id", field_schema="keyword")
     qdrant_request(
         "POST",
         f"/collections/{settings.QDRANT_COLLECTION}/points/delete",

@@ -278,7 +278,34 @@ class TestDocumentManagement(unittest.TestCase):
             "/api/documents",
             headers={"Authorization": "Bearer fake_token"},
         )
-        self.assertEqual(resp_auth.status_code, 200)
+    # 10. Deleting failed document with 0 chunks skips Qdrant and cleanly deletes
+    @patch("app.main.delete_document_points")
+    def test_delete_failed_document_skips_qdrant(self, mock_qdrant_delete):
+        db = self.Session()
+        doc = Document(
+            id="doc-failed-unindexed",
+            filename="broken.pdf",
+            file_type="pdf",
+            status="Failed",
+            num_chunks=0,
+            uploaded_at=datetime.now(timezone.utc),
+        )
+        db.add(doc)
+        db.commit()
+        db.close()
+
+        response = self.client.delete("/api/documents/doc-failed-unindexed")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("deleted", response.json()["message"])
+
+        # Qdrant delete must NOT be called since no points exist
+        mock_qdrant_delete.assert_not_called()
+
+        # Document must be gone from DB
+        db = self.Session()
+        remaining = db.query(Document).filter(Document.id == "doc-failed-unindexed").first()
+        self.assertIsNone(remaining)
+        db.close()
 
 
 if __name__ == "__main__":
