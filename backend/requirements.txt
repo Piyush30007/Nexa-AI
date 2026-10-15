@@ -53,8 +53,8 @@ langfuse                    # Live production monitoring, tracing & user feedbac
 
 # --- EMBEDDINGS (SENTENCE TRANSFORMERS) ---
 #sentence-transformers       # Used by FlashRank reranker internally
-#supabase
 psycopg2-binary
+psycopg[binary]
 
 #clerk
 clerk-backend-api
