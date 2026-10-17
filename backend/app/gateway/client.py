@@ -6,7 +6,7 @@ from app.config import settings
 
 
 # Production gateway config:
-#   - Fallback: primary @rag/llama-3.3-70b-versatile → @brag/llama-3.1-8b-instant on failure
+#   - Fallback: primary @rag/openai/gpt-oss-120b → @brag/openai/gpt-oss-20b on failure
 #   - Cache: semantic mode (requires Portkey Enterprise — silently falls back to simple on free/starter)
 #   - Retry: 2 attempts on rate limit / server error before triggering the fallback target
 # GATEWAY_CONFIG = {
@@ -17,8 +17,8 @@ from app.config import settings
 #         "on_status_codes": [429, 503]
 #     },
 #     "targets": [
-#         {"override_params": {"model": f"@{settings.GROQ_SLUG}/llama-3.3-70b-versatile"}},
-#         {"override_params": {"model": f"@{settings.GROQ_SLUG_2}/llama-3.1-8b-instant"}},
+#         {"override_params": {"model": f"@{settings.GROQ_SLUG}/openai/gpt-oss-120b"}},
+#         {"override_params": {"model": f"@{settings.GROQ_SLUG_2}/openai/gpt-oss-20b"}},
 #     ]
 # }
 model = settings.PORTKEY_MODEL

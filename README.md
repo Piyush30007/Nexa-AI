@@ -29,7 +29,7 @@ Unlike traditional "naive" RAG pipelines that execute rigid, linear retrieval, N
 - **High-Dimension Vector Retrieval**: Powered by **Qdrant Cloud** with **3,072-dimensional** Google Gemini embeddings (`gemini-embedding-2-preview`).
 - **Sub-25ms Cross-Encoder Reranking**: Integrates **FlashRank** utilizing a local, quantized ONNX cross-encoder model (`ms-marco-MiniLM-L-12-v2`) to re-score top candidate chunks semantically.
 - **Hybrid Caching Engine**: Two-tier caching combining an **L1 exact match cache** (<1ms) with an **L2 in-memory semantic cache** (cosine similarity $\ge 0.94$) and query embedding cache, achieving **<25ms hits** on exact and rephrased queries.
-- **High-Availability Gateway**: Automated fallback and retry routing via **Portkey AI Gateway** from `Llama-3.3-70b-versatile` to `Llama-3.1-8b-instant` on HTTP 429/503 errors.
+- **High-Availability Gateway**: Automated fallback and retry routing via **Portkey AI Gateway** from `openai/gpt-oss-120b` to `openai/gpt-oss-20b` on HTTP 429/503 errors.
 - **Dual Memory Isolation**: Explicitly decouples personal conversation history from authoritative company documentation to prevent memory contamination and policy hallucinations.
 - **Comprehensive Output Guardrails**: Real-time filtering against API key exposure (`gsk_`, `sk-`, `AIza`), PII (SSNs, credit cards), internal system prompt leaks, and out-of-scope persona drift.
 - **100% Verified Test Suite**: **111 backend unit and regression tests** + **8 frontend API client tests** passing with 0 failures and 0 errors.
@@ -104,8 +104,8 @@ flowchart TD
 
     subgraph ModelGateway["Inference Infrastructure"]
         PortkeyClient["Portkey AI Gateway Client\n(Fallback Mode + Automatic Retries)"]
-        PrimaryModel["Primary: Llama-3.3-70b-versatile (Groq)"]
-        FallbackModel["Fallback: Llama-3.1-8b-instant (Groq)"]
+        PrimaryModel["Primary: openai/gpt-oss-120b (Groq)"]
+        FallbackModel["Fallback: openai/gpt-oss-20b (Groq)"]
     end
 
     %% Wiring
@@ -246,7 +246,7 @@ The agent dynamically executes one of three operational pathways based on autono
 
 | Layer | Technology | Specification / Purpose |
 | :--- | :--- | :--- |
-| **Reasoning Engine** | Meta Llama 3.3 (70B) & Llama 3.1 (8B) | High-speed enterprise inference hosted on Groq LPUs |
+| **Reasoning Engine** | OpenAI GPT-OSS (120B & 20B) | High-speed enterprise inference hosted on Groq LPUs |
 | **AI Gateway** | Portkey AI Gateway | Automated fallback routing, retry handling, and unified observability |
 | **Agent Orchestration** | LangGraph & LangChain Core | StateGraph workflow, cyclic reflection loops, conditional branching |
 | **Authentication** | Clerk (JWT & JWKS) | Client auth, public key verification, user ownership, guest isolation |
@@ -465,7 +465,7 @@ CLERK_AUTHORIZED_PARTIES=http://localhost:5173,http://localhost:3000,http://127.
 # Reasoning & Gateway
 PORTKEY_API_KEY=your_portkey_api_key
 PORTKEY_CONFIG_ID=your_portkey_config_id
-PORTKEY_MODEL=@rag/llama-3.3-70b-versatile
+PORTKEY_MODEL=@rag/openai/gpt-oss-120b
 GROQ_API_KEY=your_groq_api_key
 
 # Embeddings & Vector DB
